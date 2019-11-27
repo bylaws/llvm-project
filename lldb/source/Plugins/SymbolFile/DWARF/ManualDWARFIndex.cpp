@@ -128,6 +128,7 @@ void ManualDWARFIndex::Index() {
   pool.async(finalize_fn, &IndexSet::objc_class_selectors);
   pool.async(finalize_fn, &IndexSet::globals);
   pool.async(finalize_fn, &IndexSet::types);
+  pool.async(finalize_fn, &IndexSet::generic_types);
   pool.async(finalize_fn, &IndexSet::namespaces);
   pool.wait();
 
@@ -315,8 +316,17 @@ void ManualDWARFIndex::IndexUnitImpl(DWARFUnit &unit,
     case DW_TAG_typedef:
     case DW_TAG_union_type:
     case DW_TAG_unspecified_type:
-      if (name && !is_declaration)
-        set.types.Insert(ConstString(name), ref);
+      if (name && !is_declaration) {
+        ConstString name_cs(name);
+        set.types.Insert(name_cs, ref);
+        if (Language::LanguageIsCPlusPlus(cu_language) && !name_cs.IsEmpty() &&
+            name[name_cs.GetLength() - 1] == '>') {
+          const char *angle_bracket_pos = strchr(name, '<');
+          assert(angle_bracket_pos && "missing matching angle bracket");
+          size_t generic_length = angle_bracket_pos - name;
+          set.generic_types.Insert(ConstString(name, generic_length), ref);
+        }
+      }
       if (mangled_cstr && !is_declaration)
         set.types.Insert(ConstString(mangled_cstr), ref);
       break;
@@ -400,6 +410,21 @@ void ManualDWARFIndex::GetTypes(
   auto name = context[0].name;
   m_set.types.Find(ConstString(name),
                    DIERefCallback(callback, llvm::StringRef(name)));
+}
+
+void ManualDWARFIndex::GetGenericTypes(
+    ConstString name, llvm::function_ref<bool(DWARFDIE die)> callback) {
+  Index();
+  m_set.generic_types.Find(name, DIERefCallback(callback, name.GetStringRef()));
+}
+
+void ManualDWARFIndex::GetGenericTypes(
+    const DWARFDeclContext &context,
+    llvm::function_ref<bool(DWARFDIE die)> callback) {
+  Index();
+  auto name = context[0].name;
+  m_set.generic_types.Find(ConstString(name),
+                           DIERefCallback(callback, llvm::StringRef(name)));
 }
 
 void ManualDWARFIndex::GetNamespaces(

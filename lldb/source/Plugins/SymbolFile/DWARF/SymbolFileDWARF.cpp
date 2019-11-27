@@ -2407,7 +2407,7 @@ void SymbolFileDWARF::FindTypes(
     ConstString name, const CompilerDeclContext &parent_decl_ctx,
     uint32_t max_matches,
     llvm::DenseSet<lldb_private::SymbolFile *> &searched_symbol_files,
-    TypeMap &types) {
+    TypeMap &types, bool include_templates) {
   std::lock_guard<std::recursive_mutex> guard(GetModuleMutex());
   // Make sure we haven't already searched this SymbolFile before.
   if (!searched_symbol_files.insert(this).second)
@@ -2448,6 +2448,16 @@ void SymbolFileDWARF::FindTypes(
     return types.GetSize() < max_matches;
   });
 
+  m_index->GetGenericTypes(name, [&](DWARFDIE die) {
+    if (!DIEInDeclContext(parent_decl_ctx, die))
+      return true; // The containing decl contexts don't match
+    if (Type *matching_type = ResolveType(die, true, true)) {
+      types.InsertUnique(matching_type->shared_from_this());
+    }
+
+    return types.GetSize() < max_matches;
+  });
+
   // Next search through the reachable Clang modules. This only applies for
   // DWARF objects compiled with -gmodules that haven't been processed by
   // dsymutil.
@@ -2458,7 +2468,7 @@ void SymbolFileDWARF::FindTypes(
       if (ModuleSP external_module_sp = pair.second)
         if (SymbolFile *sym_file = external_module_sp->GetSymbolFile())
           sym_file->FindTypes(name, parent_decl_ctx, max_matches,
-                              searched_symbol_files, types);
+                              searched_symbol_files, types, include_templates);
   }
 
   if (log && types.GetSize()) {
