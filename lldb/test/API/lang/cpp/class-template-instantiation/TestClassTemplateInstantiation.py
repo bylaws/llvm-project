@@ -45,6 +45,22 @@ class TestClassTemplateInstantiation(TestBase):
         self.assertTrue(expr_result.IsValid())
         self.assertEqual(expr_result.GetValue(), "8")
 
+        expr_result = frame.EvaluateExpression("::ns::foo<char>::y")
+        self.assertTrue(expr_result.IsValid())
+        self.assertEqual(expr_result.GetValue(), "11")
+
+        expr_result = frame.EvaluateExpression("::ns::foo<int>::y")
+        self.assertTrue(expr_result.IsValid())
+        self.assertEqual(expr_result.GetValue(), "14")
+
+        expr_result = frame.EvaluateExpression("C::foo<char>::z")
+        self.assertTrue(expr_result.IsValid())
+        self.assertEqual(expr_result.GetValue(), "21")
+
+        expr_result = frame.EvaluateExpression("C::foo<int>::z")
+        self.assertTrue(expr_result.IsValid())
+        self.assertEqual(expr_result.GetValue(), "24")
+
     @skipIf(debug_info=no_match(["dwarf"]),oslist=no_match(["macosx"]))
     def test_instantiate_template_from_method(self):
         self.runCmd("settings set target.experimental.infer-class-templates true")

@@ -121,6 +121,35 @@ void ManualDWARFIndex::Index() {
     progress.Increment();
   };
 
+  auto finalize_generics_fn = [this, &sets]() {
+    NameToDIE &result = m_set.generic_types;
+    NameToDIE intermediate;
+    for (auto &set : sets)
+      intermediate.Append(set.generic_types);
+    intermediate.Finalize();
+
+    // The generics are initially indexed with fully qualified name.
+    // In the following code, we choose one template instantiation
+    // for each qualified template name, and build the final index
+    // with unqualified names as keys.
+    ConstString last_name;
+    intermediate.ForEach(
+        [&last_name, &result](ConstString qualified, const DIERef &ref) {
+          if (qualified != last_name) {
+            last_name = qualified;
+
+            // Remove qualifiers from the name and insert it into the index.
+            llvm::StringRef name_ref = qualified.GetStringRef();
+            size_t separator_pos = name_ref.rfind(':');
+            if (separator_pos != llvm::StringRef::npos)
+              name_ref = name_ref.drop_front(separator_pos + 1);
+            result.Insert(ConstString(name_ref), ref);
+          }
+          return true;
+        });
+    result.Finalize();
+  };
+
   pool.async(finalize_fn, &IndexSet::function_basenames);
   pool.async(finalize_fn, &IndexSet::function_fullnames);
   pool.async(finalize_fn, &IndexSet::function_methods);
@@ -128,7 +157,7 @@ void ManualDWARFIndex::Index() {
   pool.async(finalize_fn, &IndexSet::objc_class_selectors);
   pool.async(finalize_fn, &IndexSet::globals);
   pool.async(finalize_fn, &IndexSet::types);
-  pool.async(finalize_fn, &IndexSet::generic_types);
+  pool.async([&]() { finalize_generics_fn(); });
   pool.async(finalize_fn, &IndexSet::namespaces);
   pool.wait();
 
@@ -324,7 +353,19 @@ void ManualDWARFIndex::IndexUnitImpl(DWARFUnit &unit,
           const char *angle_bracket_pos = strchr(name, '<');
           assert(angle_bracket_pos && "missing matching angle bracket");
           size_t generic_length = angle_bracket_pos - name;
-          set.generic_types.Insert(ConstString(name, generic_length), ref);
+
+          // We use qualified names as keys for generic names so that we
+          // can later easily choose one representative instantiation for
+          // each template. Here, we compute the qualified name and store
+          // the type under that name.
+          DWARFDIE parent_decl_context = die.GetParentDeclContextDIE(&unit);
+          std::string qualified_name;
+          if (parent_decl_context.Tag() != DW_TAG_compile_unit &&
+              parent_decl_context.Tag() != DW_TAG_partial_unit)
+            parent_decl_context.GetQualifiedName(qualified_name);
+          qualified_name += "::";
+          qualified_name += std::string(name, generic_length);
+          set.generic_types.Insert(ConstString(qualified_name.c_str()), ref);
         }
       }
       if (mangled_cstr && !is_declaration)

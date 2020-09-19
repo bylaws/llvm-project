@@ -424,12 +424,14 @@ bool ClangASTSource::FindClassTemplateSpecialization(
 
   TypeList types;
   llvm::DenseSet<lldb_private::SymbolFile *> searched_symbol_files;
-  m_target->GetImages().FindTypes(nullptr, name, true, 1, searched_symbol_files,
-                                  types);
+  m_target->GetImages().FindTypes(nullptr, name, true, UINT32_MAX,
+                                  searched_symbol_files, types);
 
   size_t num_types = types.GetSize();
   for (size_t ti = 0; ti < num_types; ++ti) {
     lldb::TypeSP type_sp = types.GetTypeAtIndex(ti);
+    if (type_sp->GetQualifiedName() != name)
+      continue;
     CompilerType full_type = type_sp->GetFullCompilerType();
     if (GuardedCopyType(full_type)) {
       LLDB_LOG(log, "      FCTS[{0}] Specialization inserted.", current_id);
