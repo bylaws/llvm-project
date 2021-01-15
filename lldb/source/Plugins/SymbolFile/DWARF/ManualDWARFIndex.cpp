@@ -226,6 +226,7 @@ void ManualDWARFIndex::IndexUnitImpl(DWARFUnit &unit,
     bool is_declaration = false;
     // bool is_artificial = false;
     bool has_address = false;
+    bool is_enum_class = false;
     bool has_location_or_const_value = false;
     bool is_global_or_static_variable = false;
 
@@ -244,6 +245,11 @@ void ManualDWARFIndex::IndexUnitImpl(DWARFUnit &unit,
         case DW_AT_declaration:
           if (attributes.ExtractFormValueAtIndex(i, form_value))
             is_declaration = form_value.Unsigned() != 0;
+          break;
+
+        case DW_AT_enum_class:
+          if (attributes.ExtractFormValueAtIndex(i, form_value))
+            is_enum_class = form_value.Boolean();
           break;
 
         case DW_AT_MIPS_linkage_name:
@@ -370,6 +376,16 @@ void ManualDWARFIndex::IndexUnitImpl(DWARFUnit &unit,
       }
       if (mangled_cstr && !is_declaration)
         set.types.Insert(ConstString(mangled_cstr), ref);
+      // Unscoped enumerators are basically constants in the surrounding scope.
+      if (tag == DW_TAG_enumeration_type && !is_enum_class) {
+        for (const DWARFDebugInfoEntry *value = die.GetFirstChild();
+             value != nullptr; value = value->GetSibling()) {
+          if (value->Tag() == DW_TAG_enumerator) {
+            DIERef value_ref = DWARFDIE(&unit, value).GetDIERef().getValue();
+            set.globals.Insert(ConstString(value->GetName(&unit)), value_ref);
+          }
+        }
+      }
       break;
 
     case DW_TAG_namespace:

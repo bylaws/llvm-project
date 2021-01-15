@@ -40,3 +40,20 @@ class TargetAPITestCase(TestBase):
         test_global_var(
             "global_var_of_char_type",
             "::global_var_of_char_type", "char", "'X'")
+
+        test_global_var("eFirst", "::eFirst", "MyEnum", "eFirst")
+        test_global_var("A::eMany", "A::eMany", "A::AEnum", "eMany")
+
+        # Global variable eFoo is looked up fine, since scoped enumeration
+        # members are not available as constants in the surrounding scope.
+        test_global_var("eFoo", "::eFoo", "int", "2")
+
+        # eBar is not available since it's a member of a scoped enumeration.
+        value_list = target.FindGlobalVariables("eBar", 1)
+        self.assertEqual(value_list.GetSize(), 0)
+
+        # Get enumerator values from all scopes.
+        value_list = target.FindGlobalVariables("eMany", 100500)
+        self.assertEqual(value_list.GetSize(), 3)
+        value_types = {value.GetTypeName() for value in value_list}
+        self.assertEqual(value_types, {"A::AEnum", "B::BEnum", "CEnum"})
