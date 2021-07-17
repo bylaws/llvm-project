@@ -1,0 +1,15 @@
+# This test that we are able to unwind using eh_frame in case an FDE entry does
+# not cover the entire range of a function we are unwinding through.
+
+# REQUIRES: target-x86_64, system-linux, native
+
+# RUN: %clang_host %p/Inputs/eh-frame-fde-after-pad.s -o %t
+# RUN: %lldb %t -s %s -o exit | FileCheck %s
+
+process launch
+# CHECK: stop reason = signal SIGTRAP
+
+thread backtrace
+# CHECK: frame #0: {{.*}}`inner + 1
+# CHECK: frame #1: {{.*}}`hotpatchable + 14
+# CHECK: frame #2: {{.*}}`main + 5
