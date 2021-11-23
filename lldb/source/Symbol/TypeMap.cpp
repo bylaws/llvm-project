@@ -8,6 +8,7 @@
 
 #include <vector>
 
+#include "llvm/Support/Casting.h"
 #include "llvm/Support/FormattedStream.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -15,6 +16,10 @@
 #include "lldb/Symbol/SymbolVendor.h"
 #include "lldb/Symbol/Type.h"
 #include "lldb/Symbol/TypeMap.h"
+
+// TODO: Hack because of (internal). In general TypeMap should not
+// depend on specific implementations of SymbolFile (i.e. SymbolFileDWARF).
+#include "Plugins/SymbolFile/DWARF/SymbolFileDWARF.h"
 
 using namespace lldb;
 using namespace lldb_private;
@@ -187,7 +192,32 @@ void TypeMap::RemoveMismatchedTypes(const std::string &type_scope,
         continue;
     }
 
-    ConstString match_type_name_const_str(the_type->GetQualifiedName());
+    // TODO: Quick-n-dirty solution for (internal). Remove this code
+    // (and maybe the whole RemoveMismatchedTypes function) after a better
+    // optimization is landed.
+    std::string qualified_name;
+    ConstString match_type_name_const_str;
+    SymbolFileDWARF *symfile =
+        llvm::dyn_cast<SymbolFileDWARF>(the_type->GetSymbolFile());
+    if (symfile) {
+      DWARFDIE die = symfile->GetDIE(the_type->GetID());
+      die.GetQualifiedName(qualified_name);
+
+      if (!qualified_name.empty()) {
+        llvm::StringRef qual_name_ref(qualified_name);
+        qual_name_ref.consume_front("::");
+        // Sometimes `DWARFDIE::GetQualifiedName` is not good enough? Use it
+        // only when the qualified name is different from the unqualified name.
+        if (qual_name_ref != die.GetName()) {
+          match_type_name_const_str.SetCString(qualified_name.c_str());
+        }
+      }
+    }
+    // The hack above failed, fallback to `Type::GetQualifiedName`.
+    if (!match_type_name_const_str) {
+      match_type_name_const_str = the_type->GetQualifiedName();
+    }
+
     if (match_type_name_const_str) {
       const char *match_type_name = match_type_name_const_str.GetCString();
       llvm::StringRef match_type_scope;
