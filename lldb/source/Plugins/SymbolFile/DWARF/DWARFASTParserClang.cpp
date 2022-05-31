@@ -2085,6 +2085,8 @@ bool DWARFASTParserClang::ParseTemplateParameterInfos(
       break;
     }
   }
+  if (template_param_infos.args.empty() && template_param_infos.names.empty())
+    return false;
   return template_param_infos.args.size() == template_param_infos.names.size();
 }
 
