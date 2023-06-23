@@ -2641,6 +2641,9 @@ void LinkerDriver::linkerMain(ArrayRef<const char *> argsArr) {
     doICF(ctx);
   }
 
+  if (ctx.config.machine == ARM64EC)
+    ctx.symtab.initializeEntryThunks();
+
   // Write the result.
   writeResult(ctx);
 
