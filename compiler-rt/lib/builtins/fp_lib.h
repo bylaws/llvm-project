@@ -356,7 +356,7 @@ static __inline fp_t __compiler_rt_scalbnf(fp_t x, int y) {
   return __compiler_rt_scalbnX(x, y);
 }
 static __inline fp_t __compiler_rt_fmaxf(fp_t x, fp_t y) {
-#if defined(__aarch64__)
+#if defined(__aarch64__) || defined(__arm64ec__)
   // Use __builtin_fmaxf which turns into an fmaxnm instruction on AArch64.
   return __builtin_fmaxf(x, y);
 #else
@@ -374,7 +374,7 @@ static __inline fp_t __compiler_rt_scalbn(fp_t x, int y) {
   return __compiler_rt_scalbnX(x, y);
 }
 static __inline fp_t __compiler_rt_fmax(fp_t x, fp_t y) {
-#if defined(__aarch64__)
+#if defined(__aarch64__) || defined(__arm64ec__)
   // Use __builtin_fmax which turns into an fmaxnm instruction on AArch64.
   return __builtin_fmax(x, y);
 #else
