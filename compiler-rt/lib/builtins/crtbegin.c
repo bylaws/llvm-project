@@ -70,7 +70,7 @@ __attribute__((section(".init_array"), used)) static void *__init =
 __attribute__((section(".init_array"),
                used)) static void (*__init)(void) = __do_init;
 #endif
-#elif defined(__i386__) || defined(__x86_64__)
+#elif defined(__i386__) || (defined(__x86_64__) && !defined(__arm64ec__))
 __asm__(".pushsection .init,\"ax\",@progbits\n\t"
         "call __do_init\n\t"
         ".popsection");
@@ -141,7 +141,7 @@ __attribute__((section(".fini_array"), used)) static void *__fini =
 __attribute__((section(".fini_array"),
                used)) static void (*__fini)(void) = __do_fini;
 #endif
-#elif defined(__i386__) || defined(__x86_64__)
+#elif defined(__i386__) || (defined(__x86_64__) && !defined(__arm64ec__))
 __asm__(".pushsection .fini,\"ax\",@progbits\n\t"
         "call __do_fini\n\t"
         ".popsection");
