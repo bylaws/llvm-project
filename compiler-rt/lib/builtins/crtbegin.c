@@ -48,7 +48,7 @@ static void __attribute__((used)) __do_init(void) {
 #ifdef CRT_HAS_INITFINI_ARRAY
 __attribute__((section(".init_array"),
                used)) static void (*__init)(void) = __do_init;
-#elif defined(__i386__) || defined(__x86_64__)
+#elif defined(__i386__) || (defined(__x86_64__) && !defined(__arm64ec__))
 __asm__(".pushsection .init,\"ax\",@progbits\n\t"
         "call __do_init\n\t"
         ".popsection");
@@ -56,7 +56,7 @@ __asm__(".pushsection .init,\"ax\",@progbits\n\t"
 __asm__(".pushsection .init,\"ax\",%progbits\n\t"
         "call __do_init\n\t"
         ".popsection");
-#elif defined(__arm__) || defined(__aarch64__)
+#elif defined(__arm__) || defined(__aarch64__) || defined(__arm64ec__)
 __asm__(".pushsection .init,\"ax\",%progbits\n\t"
         "bl __do_init\n\t"
         ".popsection");
@@ -105,11 +105,11 @@ static void __attribute__((used)) __do_fini(void) {
 #ifdef CRT_HAS_INITFINI_ARRAY
 __attribute__((section(".fini_array"),
                used)) static void (*__fini)(void) = __do_fini;
-#elif defined(__i386__) || defined(__x86_64__)
+#elif defined(__i386__) || (defined(__x86_64__) && !defined(__arm64ec__))
 __asm__(".pushsection .fini,\"ax\",@progbits\n\t"
         "call __do_fini\n\t"
         ".popsection");
-#elif defined(__arm__) || defined(__aarch64__)
+#elif defined(__arm__) || defined(__aarch64__) || defined(__arm64ec__)
 __asm__(".pushsection .fini,\"ax\",%progbits\n\t"
         "bl __do_fini\n\t"
         ".popsection");

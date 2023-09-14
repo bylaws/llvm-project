@@ -71,7 +71,7 @@
 
 #endif
 
-#if defined(__arm__) || defined(__aarch64__)
+#if defined(__arm__) || defined(__aarch64__) || defined(__arm64ec__)
 #define FUNC_ALIGN                                                             \
   .text SEPARATOR                                                              \
   .balign 16 SEPARATOR
