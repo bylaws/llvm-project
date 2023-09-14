@@ -52,7 +52,7 @@ else()
   set(OS_NAME "${CMAKE_SYSTEM_NAME}")
 endif()
 
-set(ARM64 aarch64)
+set(ARM64 aarch64 arm64ec)
 set(ARM32 arm armhf armv4t armv5te armv6 armv6m armv7m armv7em armv7 armv7s armv7k armv8m.base armv8m.main armv8.1m.main)
 set(AVR avr)
 set(HEXAGON hexagon)
