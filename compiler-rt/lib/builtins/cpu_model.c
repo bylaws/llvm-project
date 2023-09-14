@@ -34,8 +34,9 @@
 #define CONSTRUCTOR_ATTRIBUTE
 #endif
 
-#if (defined(__i386__) || defined(_M_IX86) || defined(__x86_64__) ||           \
-     defined(_M_X64)) &&                                                       \
+#if (defined(__i386__) || defined(_M_IX86) ||                                  \
+     (defined(__x86_64__) && !defined(__arm64ec__)) ||                         \
+     (defined(_M_X64) && !defined(_M_ARM64EC))) &&                             \
     (defined(__GNUC__) || defined(__clang__) || defined(_MSC_VER))
 
 #include <assert.h>
@@ -922,7 +923,7 @@ int CONSTRUCTOR_ATTRIBUTE __cpu_indicator_init(void) {
 
   return 0;
 }
-#elif defined(__aarch64__)
+#elif defined(__aarch64__) || defined(__arm64ec__)
 
 // LSE support detection for out-of-line atomics
 // using HWCAP and Auxiliary vector
@@ -1485,4 +1486,4 @@ void CONSTRUCTOR_ATTRIBUTE __init_cpu_features(void) {
 #endif // defined(__has_include)
 #endif // __has_include(<sys/auxv.h>)
 #endif // __has_include(<asm/hwcap.h>)
-#endif // defined(__aarch64__)
+#endif // defined(__aarch64__) || defined(__arm64ec__)
