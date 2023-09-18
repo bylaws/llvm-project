@@ -1518,7 +1518,10 @@ void tools::AddRunTimeLibs(const ToolChain &TC, const Driver &D,
 
   switch (RLT) {
   case ToolChain::RLT_CompilerRT:
-    CmdArgs.push_back(TC.getCompilerRTArgString(Args, "builtins"));
+    std::string Filename = std::string("Z:") + TC.getCompilerRTArgString(Args, "builtins");
+    std::replace(Filename.begin(), Filename.end(), '/', '\\');
+
+    CmdArgs.push_back(Args.MakeArgString(std::move(Filename)));
     AddUnwindLibrary(TC, D, CmdArgs, Args);
     break;
   case ToolChain::RLT_Libgcc:

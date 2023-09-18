@@ -1789,6 +1789,18 @@ DWARFASTParserClang::ParseStructureLikeDIE(const SymbolContext &sc,
     }
   }
 
+  // Microsoft abi requires tag decl to have MSInheritanceAttr.
+  if (m_ast.getASTContext().getTargetInfo().getCXXABI().isMicrosoft() &&
+      clang_type_was_created) {
+    clang::QualType class_qt =
+        clang::QualType::getFromOpaquePtr(clang_type.GetOpaqueQualType());
+    if (clang::CXXRecordDecl *record_decl = class_qt->getAsCXXRecordDecl()) {
+      record_decl->addAttr(clang::MSInheritanceAttr::CreateImplicit(
+          m_ast.getASTContext(),
+          clang::MSInheritanceAttr::Spelling::Keyword_unspecified_inheritance));
+    }
+  }
+
   // Store a forward declaration to this class type in case any
   // parameters in any class methods need it for the clang types for
   // function prototypes.

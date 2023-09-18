@@ -35,7 +35,8 @@ using namespace lldb_private;
 LLDB_PLUGIN_DEFINE_ADV(DynamicLoaderPOSIXWineDYLD, DynamicLoaderPosixWineDYLD)
 
 namespace {
-const char *g_wine_preloader_filename = "wine64-preloader";
+const char *g_wine_preloader_filename = "wine-preloader";
+const char *g_wine_filename = "wine";
 const char *g_wine_preloader_load_symbol = "wld_start";
 
 const char *g_ntdll_filename = "ntdll.so";
@@ -146,8 +147,6 @@ llvm::StringRef DynamicLoaderPOSIXWineDYLD::GetPluginName() {
 }
 
 void DynamicLoaderPOSIXWineDYLD::DidAttach() {
-  Log *log(GetLogIfAnyCategoriesSet(LIBLLDB_LOG_DYNAMIC_LOADER));
-
   DynamicLoaderPOSIXDYLD::DidAttach();
 
   lldb::ModuleSP executable = GetTargetExecutable();
@@ -155,8 +154,7 @@ void DynamicLoaderPOSIXWineDYLD::DidAttach() {
     return;
 
   ConstString name = executable->GetFileSpec().GetFilename();
-  if (name == g_wine_preloader_filename) {
-    LLDB_LOG(log, "Wine preloader detected.");
+  if (name == g_wine_preloader_filename || name == g_wine_filename) {
     LoadModulesFromMaps();
   }
 }
@@ -235,53 +233,18 @@ struct FileFormatAndUUID {
 // on the debug target machine.
 FileFormatAndUUID GetFileFormatAndUUID(PlatformSP platform,
                                        llvm::StringRef name) {
-  std::string objdump_command =
-      llvm::formatv("\"{0}\" -s -j .note.gnu.build-id '{1}'",
-                    GetGlobalPluginProperties()->GetRemoteObjdumpPath(), name);
-  int status = -1;
-  int signal_no = -1;
-  std::string objdump_output;
-  platform->RunShellCommand(objdump_command.c_str(), FileSpec(), &status,
-                            &signal_no, &objdump_output,
-                            std::chrono::seconds(15));
-  // If objdump fails, skip this module.
-  if (status != 0) {
-    Log *log(GetLogIfAnyCategoriesSet(LIBLLDB_LOG_DYNAMIC_LOADER));
-    LLDB_LOG(log, "Command '{0}' failed with status {1}.", objdump_command,
-             status);
-    return {};
-  }
 
-  // Parse the file format and the build id from objdump's output.
-  llvm::StringRef lines(objdump_output);
-  llvm::StringRef line;
+  llvm::SHA1 hasher;
+  hasher.update(name);
   UUID uuid;
-  uuid.Clear();
-  llvm::StringRef file_format;
-  while (!lines.empty()) {
-    std::tie(line, lines) = lines.split('\n');
+  uuid.SetFromStringRef(hasher.final());
 
-    llvm::Optional<llvm::StringRef> maybe_file_format =
-        TryExtractFileFormat(line);
-    if (maybe_file_format) {
-      file_format = *maybe_file_format;
-    }
-
-    if (line.startswith("Contents of section .note.gnu.build-id")) {
-      uuid = ExtractBuildIdFromSectionHex(lines);
-      break;
-    }
-  }
-
-  std::string triple;
-  if (file_format.startswith_insensitive("pe") ||
-      file_format.startswith_insensitive("coff")) {
-    triple = "x86_64-pc-windows-msvc";
-  } else if (file_format.startswith_insensitive("elf")) {
-    triple = "x86_64-unknown-linux";
-  }
-
-  return {triple, uuid};
+  if (name.endswith(".dll") && (name.contains("system32") || name.contains("aarch64")))
+    return {"aarch64-pc-windows-msvc", uuid};
+  else if (name.contains(".so"))
+    return {"aarch64-unknown-linux", uuid};
+  else
+    return {"", {}};
 }
 
 } // namespace
@@ -300,6 +263,7 @@ ModuleSP DynamicLoaderPOSIXWineDYLD::TryLoadModule(ModuleList &modules,
   spec.GetPlatformFileSpec() = file_spec;
   ModuleSP module_sp = modules.FindFirstModule(spec);
 
+      Log *log(GetLogIfAnyCategoriesSet(LIBLLDB_LOG_DYNAMIC_LOADER));
   if (module_sp)
     return module_sp;
 
@@ -310,6 +274,7 @@ ModuleSP DynamicLoaderPOSIXWineDYLD::TryLoadModule(ModuleList &modules,
     FileFormatAndUUID file_format_uuid =
         GetFileFormatAndUUID(platform, name.GetStringRef());
 
+      LLDB_LOG(log, "Prcheck.");
     if (file_format_uuid.m_triple.empty())
       return {};
 
@@ -319,7 +284,7 @@ ModuleSP DynamicLoaderPOSIXWineDYLD::TryLoadModule(ModuleList &modules,
     // - not all PE modules have build IDs (especially the Wine ones don't).
     // Once we equip all PE modules with build IDs and lldb-server understands
     // them, we can remove this download hack.
-    if (file_format_uuid.m_triple == "x86_64-pc-windows-msvc") {
+    if (file_format_uuid.m_triple == "aarch64-pc-windows-msvc") {
       EnsurePEModulePresent(file_spec);
     }
 
@@ -327,10 +292,9 @@ ModuleSP DynamicLoaderPOSIXWineDYLD::TryLoadModule(ModuleList &modules,
     new_module_spec.GetArchitecture().SetTriple(file_format_uuid.m_triple);
 
     module_sp = target.GetOrCreateModule(new_module_spec, true /* notify */);
-
+      LLDB_LOG(log, "create module {0}.", file_spec.GetPath());
     // If we could not create the module, just skip it.
     if (!module_sp) {
-      Log *log(GetLogIfAnyCategoriesSet(LIBLLDB_LOG_DYNAMIC_LOADER));
       LLDB_LOG(log, "Could not create module {0}.", file_spec.GetPath());
       return {};
     }
@@ -409,7 +373,7 @@ void DynamicLoaderPOSIXWineDYLD::LoadModulesFromMaps() {
     if (candidate_module.GetLength() == 0 ||
         candidate_module.GetStringRef()[0] != '/')
       continue;
-
+      LLDB_LOG(log, "Pre create not create module {0}.", candidate_module);
     // We have an executable region that follows what looked like a file header.
     // Let us try to load that module.
     ModuleSP module_sp =
