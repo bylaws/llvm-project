@@ -113,7 +113,10 @@
 
 #define GLUE2(a, b) a ## b
 #define GLUE(a, b) GLUE2(a, b)
-#define SYMBOL_NAME(name) GLUE(__USER_LABEL_PREFIX__, name)
+#define QUOTE(a) #a
+#define STR(a) QUOTE(a)
+
+#define SYMBOL_NAME(name) STR(GLUE(__USER_LABEL_PREFIX__, name))
 
 #if defined(__APPLE__)
 
