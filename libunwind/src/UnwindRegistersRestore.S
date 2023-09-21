@@ -66,7 +66,7 @@ DEFINE_LIBUNWIND_FUNCTION(__libunwind_Registers_x86_jumpto)
   # skip fs
   # skip gs
 
-#elif defined(__x86_64__)
+#elif defined(__x86_64__) && !defined(__arm64ec__)
 
 DEFINE_LIBUNWIND_FUNCTION(__libunwind_Registers_x86_64_jumpto)
 #
@@ -627,7 +627,7 @@ Lnovec:
   lwz     3,  20(3)   // do r3 last
   bctr
 
-#elif defined(__aarch64__)
+#elif defined(__aarch64__) || defined(__arm64ec__)
 
 #if defined(__ARM_FEATURE_GCS_DEFAULT)
 .arch_extension gcs
