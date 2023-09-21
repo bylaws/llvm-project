@@ -916,7 +916,7 @@ __gxx_personality_sj0
 #elif defined(__MVS__)
 __zos_cxx_personality_v2
 #else
-__gxx_personality_v0
+__gxx_personality_v0_
 #endif
 #endif
                     (int version, _Unwind_Action actions, uint64_t exceptionClass,
