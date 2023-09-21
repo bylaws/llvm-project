@@ -3291,7 +3291,8 @@ public:
 
   /// Rename the default libcall routine name for the specified libcall.
   void setLibcallName(RTLIB::Libcall Call, const char *Name) {
-    LibcallRoutineNames[Call] = Name;
+    if (Name)
+      LibcallRoutineNames[Call] =  (EC? "#" : "") + std::string(Name);
   }
   void setLibcallName(ArrayRef<RTLIB::Libcall> Calls, const char *Name) {
     for (auto Call : Calls)
@@ -3300,7 +3301,8 @@ public:
 
   /// Get the libcall routine name for the specified libcall.
   const char *getLibcallName(RTLIB::Libcall Call) const {
-    return LibcallRoutineNames[Call];
+    auto &Name = LibcallRoutineNames[Call];
+    return Name.empty() ? nullptr : Name.c_str();
   }
 
   /// Override the default CondCode to be used to test the result of the
@@ -3340,6 +3342,7 @@ public:
 
 private:
   const TargetMachine &TM;
+  bool EC;
 
   /// Tells the code generator that the target has multiple (allocatable)
   /// condition registers that can be used to store the results of comparisons
@@ -3498,7 +3501,7 @@ private:
     PromoteToType;
 
   /// Stores the name each libcall.
-  const char *LibcallRoutineNames[RTLIB::UNKNOWN_LIBCALL + 1];
+  std::string LibcallRoutineNames[RTLIB::UNKNOWN_LIBCALL + 1];
 
   /// The ISD::CondCode that should be used to test the result of each of the
   /// comparison libcall against zero.
@@ -4629,7 +4632,7 @@ public:
   /// Return the builtin name for the __builtin___clear_cache intrinsic
   /// Default is to invoke the clear cache library call
   virtual const char * getClearCacheBuiltinName() const {
-    return "__clear_cache";
+    return "#__clear_cache";
   }
 
   /// Return the register ID of the name passed in. Used by named register

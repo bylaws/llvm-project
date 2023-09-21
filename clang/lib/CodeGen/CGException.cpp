@@ -94,19 +94,19 @@ static llvm::FunctionCallee getCatchallRethrowFn(CodeGenModule &CGM,
   return CGM.CreateRuntimeFunction(FTy, Name);
 }
 
-const EHPersonality EHPersonality::GNU_C = { "__gcc_personality_v0", nullptr };
+const EHPersonality EHPersonality::GNU_C = { "#__gcc_personality_v0", nullptr };
 const EHPersonality
 EHPersonality::GNU_C_SJLJ = { "__gcc_personality_sj0", nullptr };
 const EHPersonality
-EHPersonality::GNU_C_SEH = { "__gcc_personality_seh0", nullptr };
+EHPersonality::GNU_C_SEH = { "#__gcc_personality_seh0", nullptr };
 const EHPersonality
 EHPersonality::NeXT_ObjC = { "__objc_personality_v0", nullptr };
 const EHPersonality
-EHPersonality::GNU_CPlusPlus = { "__gxx_personality_v0", nullptr };
+EHPersonality::GNU_CPlusPlus = { "#__gxx_personality_v0", nullptr };
 const EHPersonality
 EHPersonality::GNU_CPlusPlus_SJLJ = { "__gxx_personality_sj0", nullptr };
 const EHPersonality
-EHPersonality::GNU_CPlusPlus_SEH = { "__gxx_personality_seh0", nullptr };
+EHPersonality::GNU_CPlusPlus_SEH = { "#__gxx_personality_seh0", nullptr };
 const EHPersonality
 EHPersonality::GNU_ObjC = {"__gnu_objc_personality_v0", "objc_exception_throw"};
 const EHPersonality
