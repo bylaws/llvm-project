@@ -351,9 +351,9 @@ public:
     return Args.size() - 1;
   }
 
-  StringRef GetPureVirtualCallName() override { return "__cxa_pure_virtual"; }
+  StringRef GetPureVirtualCallName() override { return "#__cxa_pure_virtual"; }
   StringRef GetDeletedVirtualCallName() override
-    { return "__cxa_deleted_virtual"; }
+    { return "#__cxa_deleted_virtual"; }
 
   CharUnits getArrayCookieSizeImpl(QualType elementType) override;
   Address InitializeArrayCookie(CodeGenFunction &CGF,

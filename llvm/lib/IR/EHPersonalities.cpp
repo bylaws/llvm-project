@@ -27,7 +27,7 @@ EHPersonality llvm::classifyEHPersonality(const Value *Pers) {
     return EHPersonality::Unknown;
   return StringSwitch<EHPersonality>(F->getName())
       .Case("__gnat_eh_personality", EHPersonality::GNU_Ada)
-      .Case("__gxx_personality_v0", EHPersonality::GNU_CXX)
+      .Case("#__gxx_personality_v0", EHPersonality::GNU_CXX)
       .Case("__gxx_personality_seh0", EHPersonality::GNU_CXX)
       .Case("__gxx_personality_sj0", EHPersonality::GNU_CXX_SjLj)
       .Case("__gcc_personality_v0", EHPersonality::GNU_C)
@@ -50,7 +50,7 @@ StringRef llvm::getEHPersonalityName(EHPersonality Pers) {
   case EHPersonality::GNU_Ada:
     return "__gnat_eh_personality";
   case EHPersonality::GNU_CXX:
-    return "__gxx_personality_v0";
+    return "#__gxx_personality_v0";
   case EHPersonality::GNU_CXX_SjLj:
     return "__gxx_personality_sj0";
   case EHPersonality::GNU_C:

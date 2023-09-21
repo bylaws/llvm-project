@@ -29,6 +29,7 @@ if (LIBCXXABI_ENABLE_EXCEPTIONS)
   list(APPEND LIBCXXABI_SOURCES
     cxa_exception.cpp
     cxa_personality.cpp
+    cxa_personality_hack.cpp
   )
 else()
   list(APPEND LIBCXXABI_SOURCES
