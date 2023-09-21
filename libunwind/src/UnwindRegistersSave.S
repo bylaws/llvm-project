@@ -65,7 +65,7 @@ DEFINE_LIBUNWIND_FUNCTION(__unw_getcontext)
   xorl  %eax, %eax    # return UNW_ESUCCESS
   ret
 
-#elif defined(__x86_64__)
+#elif defined(__x86_64__) && !defined(__arm64ec__)
 
 #
 # extern int __unw_getcontext(unw_context_t* thread_state)
@@ -716,7 +716,7 @@ LnoR2Fix:
   blr
 
 
-#elif defined(__aarch64__)
+#elif defined(__aarch64__) || defined(__arm64ec__)
 
 //
 // extern int __unw_getcontext(unw_context_t* thread_state)
