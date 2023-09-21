@@ -275,6 +275,16 @@
   SEPARATOR CFI_START                                                          \
   SEPARATOR BTI_C
 
+#define DEFINE_COMPILERRT_OUTLINE_FUNCTION(name)                               \
+  DEFINE_CODE_STATE                                                            \
+  FUNC_ALIGN                                                                   \
+  .globl SYMBOL_NAME(name) SEPARATOR                                           \
+  SYMBOL_IS_FUNC(SYMBOL_NAME(name)) SEPARATOR                                  \
+  DECLARE_SYMBOL_VISIBILITY(name)                                              \
+  CFI_START SEPARATOR                                                          \
+  DECLARE_FUNC_ENCODING                                                        \
+  SYMBOL_NAME(name): SEPARATOR BTI_C
+
 #define DEFINE_COMPILERRT_FUNCTION_ALIAS(name, target)                         \
   .globl SYMBOL_NAME(name) SEPARATOR                                           \
   SYMBOL_IS_FUNC(SYMBOL_NAME(name)) SEPARATOR                                  \
