@@ -636,6 +636,9 @@ static StringRef getArchNameForCompilerRTLib(const ToolChain &TC,
   if (TC.getArch() == llvm::Triple::x86_64 && Triple.isX32())
     return "x32";
 
+  if (Triple.isWindowsArm64EC())
+    return "arm64ec";
+
   return llvm::Triple::getArchTypeName(TC.getArch());
 }
 
