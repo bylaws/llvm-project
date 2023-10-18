@@ -1903,7 +1903,7 @@ void tools::AddRunTimeLibs(const ToolChain &TC, const Driver &D,
   switch (RLT) {
   case ToolChain::RLT_CompilerRT:
     CmdArgs.push_back(TC.getCompilerRTArgString(Args, "builtins"));
-    AddUnwindLibrary(TC, D, CmdArgs, Args);
+  //  AddUnwindLibrary(TC, D, CmdArgs, Args);
     break;
   case ToolChain::RLT_Libgcc:
     // Make sure libgcc is not used under MSVC environment by default

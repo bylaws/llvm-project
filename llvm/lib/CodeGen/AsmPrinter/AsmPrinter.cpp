@@ -2745,15 +2745,14 @@ bool AsmPrinter::emitSpecialLLVMGlobal(const GlobalVariable *GV) {
             OutContext.getOrCreateSymbol("__imp_" + Src->getName()));
         OutStreamer->emitCOFFSymbolIndex(getSymbol(Dst));
         OutStreamer->emitInt32(Kind);
-      } else {
-        // FIXME: For non-dllimport functions, MSVC emits the same entry
-        // twice, for reasons I don't understand.  I have to assume the linker
-        // ignores the redundant entry; there aren't any reasonable semantics
-        // to attach to it.
-        OutStreamer->emitCOFFSymbolIndex(getSymbol(Src));
-        OutStreamer->emitCOFFSymbolIndex(getSymbol(Dst));
-        OutStreamer->emitInt32(Kind);
       }
+      // FIXME: For non-dllimport functions, MSVC emits the same entry
+      // twice, for reasons I don't understand.  I have to assume the linker
+      // ignores the redundant entry; there aren't any reasonable semantics
+      // to attach to it.
+      OutStreamer->emitCOFFSymbolIndex(getSymbol(Src));
+      OutStreamer->emitCOFFSymbolIndex(getSymbol(Dst));
+      OutStreamer->emitInt32(Kind);
     }
     return true;
   }
