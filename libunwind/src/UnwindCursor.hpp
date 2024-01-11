@@ -823,7 +823,6 @@ unw_word_t UnwindCursor<A, R>::getReg(int regNum) {
     return _msEcContext.X12;
   case UNW_AARCH64_X15:
     return _msEcContext.X15;
-    // TODO: check below
   case UNW_AARCH64_X16:
     return static_cast<unw_word_t>(_msEcContext.X16_0) |
            static_cast<unw_word_t>(_msEcContext.X16_1) << 16 |

@@ -2174,7 +2174,7 @@ static void handleNakedAttr(Sema &S, Decl *D, const ParsedAttr &AL) {
   if (AL.isDeclspecAttribute()) {
     const auto &Triple = S.getASTContext().getTargetInfo().getTriple();
     const auto &Arch = Triple.getArch();
-    if (Arch != llvm::Triple::x86 &&
+    if (Arch != llvm::Triple::x86 && !Triple.isWindowsArm64EC() &&
         (Arch != llvm::Triple::arm && Arch != llvm::Triple::thumb)) {
       S.Diag(AL.getLoc(), diag::err_attribute_not_supported_on_arch)
           << AL << Triple.getArchName();

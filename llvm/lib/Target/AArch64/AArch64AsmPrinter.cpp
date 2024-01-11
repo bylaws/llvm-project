@@ -1104,10 +1104,10 @@ void AArch64AsmPrinter::emitFunctionEntryLabel() {
     TS->emitDirectiveVariantPCS(CurrentFnSym);
   }
 
-  if (TM.getTargetTriple().isWindowsArm64EC()) {
-    // For ARM64EC targets, a function definition's name is mangled differently
-    // from the normal symbol. We emit the alias from the unmangled symbol to
-    // mangled symbol name here.
+  if (TM.getTargetTriple().isWindowsArm64EC() && !MF->getFunction().hasInternalLinkage()) {
+    // For ARM64EC targets, a non-internal function definition's name is
+    // mangled differently from the normal symbol. We emit the alias from the
+    // unmangled symbol to mangled symbol name here.
     if (MDNode *Unmangled = MF->getFunction().getMetadata("arm64ec_unmangled_name")) {
       AsmPrinter::emitFunctionEntryLabel();
 

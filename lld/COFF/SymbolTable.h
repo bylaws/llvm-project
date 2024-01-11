@@ -143,7 +143,7 @@ private:
   llvm::DenseMap<llvm::CachedHashStringRef, Symbol *> symMap;
   std::unique_ptr<BitcodeCompiler> lto;
   bool ltoCompilationDone = false;
-  llvm::DenseMap<std::pair<llvm::CachedHashStringRef, uint32_t>, Symbol *>
+  llvm::DenseMap<std::pair<Symbol *, uint32_t>, Symbol *>
       thunkECMap;
   llvm::DenseMap<Chunk *, Chunk *> entryThunkMap;
 

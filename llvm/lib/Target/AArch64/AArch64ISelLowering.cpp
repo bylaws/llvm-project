@@ -7256,6 +7256,11 @@ bool AArch64TargetLowering::isEligibleForTailCallOptimization(
   const Function &CallerF = MF.getFunction();
   CallingConv::ID CallerCC = CallerF.getCallingConv();
 
+  // Arm64EC varargs calls expect that x4 = sp at entry, this complicates tail
+  // call handling so disable for now.
+  if (IsVarArg && Subtarget->isWindowsArm64EC())
+    return false;
+
   // SME Streaming functions are not eligible for TCO as they may require
   // the streaming mode or ZA to be restored after returning from the call.
   SMEAttrs CallerAttrs(MF.getFunction());
@@ -7929,11 +7934,22 @@ AArch64TargetLowering::LowerCall(CallLoweringInfo &CLI,
   }
 
   if (IsVarArg && Subtarget->isWindowsArm64EC()) {
+    SDValue ParamPtr = StackPtr;
+    if (MF.getFunction().getCallingConv() == CallingConv::ARM64EC_Thunk_X64) {
+      // When in an entry thunk, on-stack arguments are accessed relative to
+      // x4 rather than sp, and at an offset of 0x20 to account for the
+      // scratch space allocated to regular arguments.
+      Register VReg = MF.addLiveIn(AArch64::X4, &AArch64::GPR64RegClass);
+      SDValue Val = DAG.getCopyFromReg(Chain, DL, VReg, MVT::i64);
+      SDValue PtrOff = DAG.getIntPtrConstant(32, DL);
+      ParamPtr = DAG.getNode(ISD::ADD, DL, PtrVT, Val, PtrOff);
+    }
+
     // For vararg calls, the Arm64EC ABI requires values in x4 and x5
     // describing the argument list.  x4 contains the address of the
     // first stack parameter. x5 contains the size in bytes of all parameters
     // passed on the stack.
-    RegsToPass.emplace_back(AArch64::X4, StackPtr);
+    RegsToPass.emplace_back(AArch64::X4, ParamPtr);
     RegsToPass.emplace_back(AArch64::X5,
                             DAG.getConstant(NumBytes, DL, MVT::i64));
   }
