@@ -207,7 +207,17 @@
 #define GLUE4_(a, b, c, d) a##b##c##d
 #define GLUE4(a, b, c, d) GLUE4_(a, b, c, d)
 
+#ifdef __arm64ec__
+#define QUOTE(a) #a
+#define STR(a) QUOTE(a)
+#define HASH_LIT #
+#define HASH() HASH_LIT
+#define SYMBOL_NAME_C(name) name
+#define SYMBOL_NAME(name) STR(HASH()name)
+#else
 #define SYMBOL_NAME(name) GLUE(__USER_LABEL_PREFIX__, name)
+#define SYMBOL_NAME_C(name) SYMBOL_NAME(name)
+#endif
 
 #ifdef VISIBILITY_HIDDEN
 #define DECLARE_SYMBOL_VISIBILITY(name)                                        \
