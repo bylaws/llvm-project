@@ -8,7 +8,7 @@
 
 #include "cpu_model.h"
 
-#if !defined(__aarch64__)
+#if !(defined(__aarch64__) || defined(__arm64ec__))
 #error This file is intended only for aarch64-based targets
 #endif
 
