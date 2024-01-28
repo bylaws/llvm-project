@@ -8010,7 +8010,17 @@ AArch64TargetLowering::LowerCall(CallLoweringInfo &CLI,
 
   if (IsVarArg && Subtarget->isWindowsArm64EC()) {
     SDValue ParamPtr = StackPtr;
-    if (IsTailCall) {
+    if (MF.getFunction().getCallingConv() == CallingConv::ARM64EC_Thunk_X64) {
+      // When in an entry thunk the x64 SP is passed via x4. This cannot
+      // be directly passed through since x64 varargs calls have a 32 byte
+      // shadow store at SP followed by the in-stack parameters,
+      // Arm64EC varargs calls on the other hand expect x4
+      // to point to the first in-stack parameter.
+      Register VReg = MF.addLiveIn(AArch64::X4, &AArch64::GPR64RegClass);
+      SDValue Val = DAG.getCopyFromReg(Chain, DL, VReg, MVT::i64);
+      SDValue PtrOff = DAG.getIntPtrConstant(32, DL);
+      ParamPtr = DAG.getNode(ISD::ADD, DL, PtrVT, Val, PtrOff);
+    } else if (IsTailCall) {
       // Create a dummy object at the top of the stack that can be used to get
       // the SP after the epilogue
       int FI = MF.getFrameInfo().CreateFixedObject(1, FPDiff, true);
