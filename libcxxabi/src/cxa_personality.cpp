@@ -1001,7 +1001,7 @@ __gxx_personality_v0_
 
 #if defined(__SEH__) && !defined(__USING_SJLJ_EXCEPTIONS__)
 extern "C" _LIBCXXABI_FUNC_VIS EXCEPTION_DISPOSITION
-__gxx_personality_seh0(PEXCEPTION_RECORD ms_exc, void *this_frame,
+___gxx_personality_seh0(PEXCEPTION_RECORD ms_exc, void *this_frame,
                        PCONTEXT ms_orig_context, PDISPATCHER_CONTEXT ms_disp)
 {
   return _GCC_specific_handler(ms_exc, this_frame, ms_orig_context, ms_disp,
