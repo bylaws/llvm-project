@@ -231,6 +231,7 @@ void AArch64Arm64ECCallLowering::getThunkRetType(
         Type *SRetType = SRetAttr.getValueAsType();
         Align SRetAlign = AttrList.getParamAlignment(0).valueOrOne();
         Type *Arm64Ty, *X64Ty;
+        Out << "sret"; // TODO: dxvk needs this, why?
         canonicalizeThunkType(SRetType, SRetAlign, /*Ret*/ true, ArgSizeBytes,
                               Out, Arm64Ty, X64Ty);
         Arm64RetTy = VoidTy;

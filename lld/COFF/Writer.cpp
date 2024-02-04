@@ -1225,8 +1225,10 @@ void Writer::createImportTables() {
     if (ctx.config.dllOrder.count(dll) == 0)
       ctx.config.dllOrder[dll] = ctx.config.dllOrder.size();
 
-    if (file->impSym && !isa<DefinedImportData>(file->impSym))
-      fatal(toString(ctx, *file->impSym) + " was replaced");
+    if (file->impSym && !isa<DefinedImportData>(file->impSym)) {
+      warn(toString(ctx, *file->impSym) + " was replaced");
+      continue;
+    }
     DefinedImportData *impSym = cast_or_null<DefinedImportData>(file->impSym);
     if (ctx.config.delayLoads.count(StringRef(file->dllName).lower())) {
       if (!file->thunkSym)
@@ -1249,16 +1251,20 @@ void Writer::appendImportThunks() {
       continue;
 
     if (file->thunkSym) {
-      if (!isa<DefinedImportThunk>(file->thunkSym))
-        fatal(toString(ctx, *file->thunkSym) + " was replaced");
+      if (!isa<DefinedImportThunk>(file->thunkSym)) {
+        warn(toString(ctx, *file->thunkSym) + " was replaced");
+        continue;
+      }
       auto *chunk = cast<DefinedImportThunk>(file->thunkSym)->getChunk();
       if (chunk->live)
         textSec->addChunk(chunk);
     }
 
     if (file->auxThunkSym) {
-      if (!isa<DefinedImportThunk>(file->auxThunkSym))
-        fatal(toString(ctx, *file->auxThunkSym) + " was replaced");
+      if (!isa<DefinedImportThunk>(file->auxThunkSym)) {
+        warn(toString(ctx, *file->auxThunkSym) + " was replaced");
+        continue;
+      }
       auto *chunk = cast<DefinedImportThunk>(file->auxThunkSym)->getChunk();
       if (chunk->live)
         textSec->addChunk(chunk);

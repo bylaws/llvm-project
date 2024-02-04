@@ -670,8 +670,18 @@ Error writeImportLibrary(StringRef ImportName, StringRef Path,
       }
 
       if (!E.AliasTarget.empty() && Name != E.AliasTarget) {
-        Members.push_back(OF.createWeakExternal(E.AliasTarget, Name, false, M));
-        Members.push_back(OF.createWeakExternal(E.AliasTarget, Name, true, M));
+        if (isArm64EC(Machine)) {
+          Members.push_back(OF.createWeakExternal(
+                  getArm64ECMangledFunctionName(E.AliasTarget),
+                  getArm64ECMangledFunctionName(Name), false, Machine));
+          Members.push_back(OF.createWeakExternal(
+                  getArm64ECDemangledFunctionName(E.AliasTarget),
+                  getArm64ECDemangledFunctionName(Name), true, Machine));
+        } else {
+          Members.push_back(OF.createWeakExternal(E.AliasTarget, Name, false, Machine));
+          Members.push_back(OF.createWeakExternal(E.AliasTarget, Name, true, Machine));
+        }
+
         continue;
       }
 
