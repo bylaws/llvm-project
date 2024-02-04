@@ -546,23 +546,20 @@ std::pair<Symbol *, bool> SymbolTable::insert(StringRef name, InputFile *file) {
 }
 
 void SymbolTable::addECThunk(Symbol *from, Symbol *to, uint32_t type) {
-  thunkECMap[{CachedHashStringRef(from->getName()), type}] = to;
+  thunkECMap[{from, type}] = to;
 }
 
 Symbol *SymbolTable::findECThunk(Symbol *from, Arm64ECThunkType type) {
-  return thunkECMap.lookup(
-      {CachedHashStringRef(from->getName()), uint32_t(type)});
+  return thunkECMap.lookup({from, uint32_t(type)});
 }
 
 void SymbolTable::initializeEntryThunks() {
   for (auto it : thunkECMap) {
     if (it.first.second != 1)
       continue;
-    Symbol *from = find(it.first.first.val());
-    if (!from || !isa<Defined>(from) || !isa<Defined>(it.second))
+    Symbol *from = it.first.first;
+    if (!isa<Defined>(from) || !isa<Defined>(it.second))
       continue;
-    if (!from->isCOMDAT || cast<DefinedRegular>(from)->getValue())
-      error("non COMDAT symbol '" + it.first.first.val() + "' in hybrid map");
     entryThunkMap[cast<Defined>(from)->getChunk()] =
         cast<Defined>(it.second)->getChunk();
   }
