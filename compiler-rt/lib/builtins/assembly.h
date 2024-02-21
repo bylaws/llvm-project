@@ -210,9 +210,13 @@
 #ifdef __arm64ec__
 #define QUOTE(a) #a
 #define STR(a) QUOTE(a)
-#define SYMBOL_NAME(name) STR(GLUE(#, name))
+#define HASH_LIT #
+#define HASH() HASH_LIT
+#define SYMBOL_NAME_C(name) name
+#define SYMBOL_NAME(name) STR(HASH()name)
 #else
 #define SYMBOL_NAME(name) GLUE(__USER_LABEL_PREFIX__, name)
+#define SYMBOL_NAME_C(name) SYMBOL_NAME(name)
 #endif
 
 #ifdef VISIBILITY_HIDDEN

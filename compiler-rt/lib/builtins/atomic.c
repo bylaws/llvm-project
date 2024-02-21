@@ -35,12 +35,12 @@
 
 // Clang objects if you redefine a builtin.  This little hack allows us to
 // define a function with the same name as an intrinsic.
-#pragma redefine_extname __atomic_load_c SYMBOL_NAME(__atomic_load)
-#pragma redefine_extname __atomic_store_c SYMBOL_NAME(__atomic_store)
-#pragma redefine_extname __atomic_exchange_c SYMBOL_NAME(__atomic_exchange)
-#pragma redefine_extname __atomic_compare_exchange_c SYMBOL_NAME(              \
+#pragma redefine_extname __atomic_load_c SYMBOL_NAME_C(__atomic_load)
+#pragma redefine_extname __atomic_store_c SYMBOL_NAME_C(__atomic_store)
+#pragma redefine_extname __atomic_exchange_c SYMBOL_NAME_C(__atomic_exchange)
+#pragma redefine_extname __atomic_compare_exchange_c SYMBOL_NAME_C(              \
     __atomic_compare_exchange)
-#pragma redefine_extname __atomic_is_lock_free_c SYMBOL_NAME(                  \
+#pragma redefine_extname __atomic_is_lock_free_c SYMBOL_NAME_C(                  \
     __atomic_is_lock_free)
 
 /// Number of locks.  This allocates one page on 32-bit platforms, two on
