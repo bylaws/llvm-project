@@ -89,6 +89,7 @@ private:
   Module *M = nullptr;
 
   Type *PtrTy;
+  Type *I32Ty;
   Type *I64Ty;
   Type *VoidTy;
 
@@ -789,6 +790,7 @@ bool AArch64Arm64ECCallLowering::runOnModule(Module &Mod) {
     cfguard_module_flag = MD->getZExtValue();
 
   PtrTy = PointerType::getUnqual(M->getContext());
+  I32Ty = Type::getInt32Ty(M->getContext());
   I64Ty = Type::getInt64Ty(M->getContext());
   VoidTy = Type::getVoidTy(M->getContext());
 
@@ -845,6 +847,25 @@ bool AArch64Arm64ECCallLowering::runOnModule(Module &Mod) {
   }
 
   SetVector<GlobalValue *> DirectCalledFns;
+
+  if (!M->getFunction("memcpy")) {
+    Function *MemCpy =
+        Function::Create(FunctionType::get(PtrTy, {PtrTy, PtrTy, I64Ty}, false), GlobalValue::WeakODRLinkage, 0, "memcpy", M);
+    DirectCalledFns.insert(MemCpy);
+  }
+
+  if (!M->getFunction("memmove")) {
+    Function *MemCpy =
+        Function::Create(FunctionType::get(PtrTy, {PtrTy, PtrTy, I64Ty}, false), GlobalValue::WeakODRLinkage, 0, "memmove", M);
+    DirectCalledFns.insert(MemCpy);
+  }
+
+  if (!M->getFunction("memset")) {
+    Function *MemSet =
+        Function::Create(FunctionType::get(PtrTy, {PtrTy, I32Ty, I64Ty}, false), GlobalValue::WeakODRLinkage, 0, "memset", M);
+    DirectCalledFns.insert(MemSet);
+  }
+
   for (Function &F : Mod)
     if (!F.isDeclaration() &&
         F.getCallingConv() != CallingConv::ARM64EC_Thunk_Native &&
