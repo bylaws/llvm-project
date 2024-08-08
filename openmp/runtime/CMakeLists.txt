@@ -61,6 +61,8 @@ else() # Part of LLVM build
     set(LIBOMP_ARCH aarch64)
   elseif(LIBOMP_NATIVE_ARCH MATCHES "arm64")
     set(LIBOMP_ARCH aarch64)
+  elseif(LIBOMP_NATIVE_ARCH MATCHES "arm64ec")
+    set(LIBOMP_ARCH aarch64)
   elseif(LIBOMP_NATIVE_ARCH MATCHES "arm")
     set(LIBOMP_ARCH arm)
   elseif(LIBOMP_NATIVE_ARCH MATCHES "riscv64")
