@@ -124,10 +124,10 @@
 #define KMP_ARCH_S390X 0
 
 #if KMP_OS_WINDOWS
-#if defined(_M_AMD64) || defined(__x86_64)
+#if (defined(_M_AMD64) && !defined(_M_ARM64EC)) || (defined(__x86_64) && !defined(__arm64ec__))
 #undef KMP_ARCH_X86_64
 #define KMP_ARCH_X86_64 1
-#elif defined(__aarch64__) || defined(_M_ARM64)
+#elif defined(__aarch64__) || defined(_M_ARM64) || defined(__arm64ec__) || defined(_M_ARM64EC)
 #undef KMP_ARCH_AARCH64
 #define KMP_ARCH_AARCH64 1
 #elif defined(__arm__) || defined(_M_ARM)
