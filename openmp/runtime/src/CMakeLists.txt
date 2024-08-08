@@ -108,11 +108,11 @@ else()
     # Windows specific files
     libomp_append(LIBOMP_CXXFILES z_Windows_NT_util.cpp)
     libomp_append(LIBOMP_CXXFILES z_Windows_NT-586_util.cpp)
-    if(${LIBOMP_ARCH} STREQUAL "i386" OR ${LIBOMP_ARCH} STREQUAL "x86_64")
-      libomp_append(LIBOMP_ASMFILES z_Windows_NT-586_asm.asm) # Windows assembly file
-    elseif((${LIBOMP_ARCH} STREQUAL "aarch64" OR ${LIBOMP_ARCH} STREQUAL "arm") AND (NOT MSVC OR CMAKE_C_COMPILER_ID STREQUAL "Clang"))
+    if((${LIBOMP_ARCH} STREQUAL "aarch64" OR ${LIBOMP_ARCH} STREQUAL "arm64ec" OR ${LIBOMP_ARCH} STREQUAL "arm") AND (NOT MSVC OR CMAKE_C_COMPILER_ID STREQUAL "Clang"))
       # z_Linux_asm.S works for AArch64 and ARM Windows too.
       libomp_append(LIBOMP_GNUASMFILES z_Linux_asm.S)
+    elseif(${LIBOMP_ARCH} STREQUAL "i386" OR ${LIBOMP_ARCH} STREQUAL "x86_64")
+      libomp_append(LIBOMP_ASMFILES z_Windows_NT-586_asm.asm) # Windows assembly file
     else()
       # AArch64 with MSVC gets implementations of the functions from
       # ifdeffed sections in z_Windows_NT-586_util.cpp.
