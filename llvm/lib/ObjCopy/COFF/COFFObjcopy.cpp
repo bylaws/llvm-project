@@ -187,6 +187,7 @@ static Error handleArgs(const CommonConfig &Config,
     // content. The VirtualSize field in the section header is kept intact.
     Obj.truncateSections([](const Section &Sec) {
       return !isDebugSection(Sec) && Sec.Name != ".buildid" &&
+             Sec.Name != ".rdata" &&
              ((Sec.Header.Characteristics &
                (IMAGE_SCN_CNT_CODE | IMAGE_SCN_CNT_INITIALIZED_DATA)) != 0);
     });
