@@ -1377,18 +1377,19 @@ void LinkerDriver::pullArm64ECIcallHelper() {
 // explicitly specified. The automatic behavior can be disabled using the
 // -exclude-all-symbols option, so that lld-link behaves like link.exe rather
 // than MinGW in the case that nothing is explicitly exported.
-void LinkerDriver::maybeExportMinGWSymbols(const opt::InputArgList &args) {
+void LinkerDriver::maybeExportMinGWSymbols(SymbolTable &symtab,
+                                           const opt::InputArgList &args) {
   if (!args.hasArg(OPT_export_all_symbols)) {
     if (!ctx.config.dll)
       return;
 
-    if (!ctx.symtab.exports.empty())
+    if (!symtab.exports.empty())
       return;
     if (args.hasArg(OPT_exclude_all_symbols))
       return;
   }
 
-  AutoExporter exporter(ctx, excludedSymbols);
+  AutoExporter exporter(symtab, excludedSymbols);
 
   for (auto *arg : args.filtered(OPT_wholearchive_file))
     if (std::optional<StringRef> path = findFile(arg->getValue()))
@@ -1401,7 +1402,7 @@ void LinkerDriver::maybeExportMinGWSymbols(const opt::InputArgList &args) {
       exporter.addExcludedSymbol(ctx.symtab.mangle(sym));
   }
 
-  ctx.symtab.forEachSymbol([&](Symbol *s) {
+  symtab.forEachSymbol([&](Symbol *s) {
     auto *def = dyn_cast<Defined>(s);
     if (!exporter.shouldExport(def))
       return;
@@ -1418,7 +1419,7 @@ void LinkerDriver::maybeExportMinGWSymbols(const opt::InputArgList &args) {
       if (!(c->getOutputCharacteristics() & IMAGE_SCN_MEM_EXECUTE))
         e.data = true;
     s->isUsedInRegularObj = true;
-    ctx.symtab.exports.push_back(e);
+    symtab.exports.push_back(e);
   });
 }
 
@@ -2613,14 +2614,14 @@ void LinkerDriver::linkerMain(ArrayRef<const char *> argsArr) {
   if (errorCount())
     return;
 
-  ctx.forEachSymtab([](SymbolTable &symtab) {
+  ctx.forEachSymtab([&](SymbolTable &symtab) {
     symtab.hadExplicitExports = !symtab.exports.empty();
+    if (config->mingw) {
+      // In MinGW, all symbols are automatically exported if no symbols
+      // are chosen to be exported.
+      maybeExportMinGWSymbols(symtab, args);
+    }
   });
-  if (config->mingw) {
-    // In MinGW, all symbols are automatically exported if no symbols
-    // are chosen to be exported.
-    maybeExportMinGWSymbols(args);
-  }
 
   // Do LTO by compiling bitcode input files to a set of native COFF files then
   // link those files (unless -thinlto-index-only was given, in which case we
