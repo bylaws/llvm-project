@@ -247,8 +247,9 @@ private:
   void getSymbolsFromSections(ObjFile *file,
                               ArrayRef<SectionChunk *> symIdxChunks,
                               std::vector<Symbol *> &symbols);
-  void maybeAddRVATable(SymbolRVASet tableSymbols, StringRef tableSym,
-                        StringRef countSym, bool hasFlag=false);
+  void maybeAddRVATable(SymbolTable &symtab, SymbolRVASet tableSymbols,
+                        StringRef tableSym, StringRef countSym,
+                        bool hasFlag = false);
   void setSectionPermissions();
   void setECSymbols();
   void writeSections();
@@ -1944,7 +1945,7 @@ void Writer::createSEHTable() {
   setNoSEHCharacteristic =
       handlers.empty() || !ctx.symtab.findUnderscore("_load_config_used");
 
-  maybeAddRVATable(std::move(handlers), "__safe_se_handler_table",
+  maybeAddRVATable(ctx.symtab, std::move(handlers), "__safe_se_handler_table",
                    "__safe_se_handler_count");
 }
 
@@ -2045,9 +2046,11 @@ void Writer::createGuardCFTables() {
     // with /guard:cf.
     for (ObjFile *file : ctx.objFileInstances) {
       if (file->hasGuardCF()) {
-        Symbol *flagSym = ctx.symtab.findUnderscore("__guard_flags");
-        cast<DefinedAbsolute>(flagSym)->setVA(
-            uint32_t(GuardFlags::CF_INSTRUMENTED));
+        ctx.forEachSymtab([&](SymbolTable &symtab) {
+          Symbol *flagSym = symtab.findUnderscore("__guard_flags");
+          cast<DefinedAbsolute>(flagSym)->setVA(
+              uint32_t(GuardFlags::CF_INSTRUMENTED));
+        });
         break;
       }
     }
@@ -2104,33 +2107,35 @@ void Writer::createGuardCFTables() {
     if (c.inputChunk->getAlignment() < 16)
       c.inputChunk->setAlignment(16);
 
-  maybeAddRVATable(std::move(addressTakenSyms), "__guard_fids_table",
-                   "__guard_fids_count");
+  ctx.forEachSymtab([&](SymbolTable &symtab) {
+    maybeAddRVATable(symtab, std::move(addressTakenSyms), "__guard_fids_table",
+                     "__guard_fids_count");
 
-  // Add the Guard Address Taken IAT Entry Table (.giats).
-  maybeAddRVATable(std::move(giatsRVASet), "__guard_iat_table",
-                   "__guard_iat_count");
+    // Add the Guard Address Taken IAT Entry Table (.giats).
+    maybeAddRVATable(symtab, std::move(giatsRVASet), "__guard_iat_table",
+                     "__guard_iat_count");
 
-  // Add the longjmp target table unless the user told us not to.
-  if (config->guardCF & GuardCFLevel::LongJmp)
-    maybeAddRVATable(std::move(longJmpTargets), "__guard_longjmp_table",
-                     "__guard_longjmp_count");
+    // Add the longjmp target table unless the user told us not to.
+    if (config->guardCF & GuardCFLevel::LongJmp)
+      maybeAddRVATable(symtab, std::move(longJmpTargets),
+                       "__guard_longjmp_table", "__guard_longjmp_count");
 
-  // Add the ehcont target table unless the user told us not to.
-  if (config->guardCF & GuardCFLevel::EHCont)
-    maybeAddRVATable(std::move(ehContTargets), "__guard_eh_cont_table",
-                     "__guard_eh_cont_count");
+    // Add the ehcont target table unless the user told us not to.
+    if (config->guardCF & GuardCFLevel::EHCont)
+      maybeAddRVATable(symtab, std::move(ehContTargets),
+                       "__guard_eh_cont_table", "__guard_eh_cont_count");
 
-  // Set __guard_flags, which will be used in the load config to indicate that
-  // /guard:cf was enabled.
-  uint32_t guardFlags = uint32_t(GuardFlags::CF_INSTRUMENTED) |
-                        uint32_t(GuardFlags::CF_FUNCTION_TABLE_PRESENT);
-  if (config->guardCF & GuardCFLevel::LongJmp)
-    guardFlags |= uint32_t(GuardFlags::CF_LONGJUMP_TABLE_PRESENT);
-  if (config->guardCF & GuardCFLevel::EHCont)
-    guardFlags |= uint32_t(GuardFlags::EH_CONTINUATION_TABLE_PRESENT);
-  Symbol *flagSym = ctx.symtab.findUnderscore("__guard_flags");
-  cast<DefinedAbsolute>(flagSym)->setVA(guardFlags);
+    // Set __guard_flags, which will be used in the load config to indicate that
+    // /guard:cf was enabled.
+    uint32_t guardFlags = uint32_t(GuardFlags::CF_INSTRUMENTED) |
+                          uint32_t(GuardFlags::CF_FUNCTION_TABLE_PRESENT);
+    if (config->guardCF & GuardCFLevel::LongJmp)
+      guardFlags |= uint32_t(GuardFlags::CF_LONGJUMP_TABLE_PRESENT);
+    if (config->guardCF & GuardCFLevel::EHCont)
+      guardFlags |= uint32_t(GuardFlags::EH_CONTINUATION_TABLE_PRESENT);
+    Symbol *flagSym = symtab.findUnderscore("__guard_flags");
+    cast<DefinedAbsolute>(flagSym)->setVA(guardFlags);
+  });
 }
 
 // Take a list of input sections containing symbol table indices and add those
@@ -2189,8 +2194,9 @@ void Writer::markSymbolsForRVATable(ObjFile *file,
 // Replace the absolute table symbol with a synthetic symbol pointing to
 // tableChunk so that we can emit base relocations for it and resolve section
 // relative relocations.
-void Writer::maybeAddRVATable(SymbolRVASet tableSymbols, StringRef tableSym,
-                              StringRef countSym, bool hasFlag) {
+void Writer::maybeAddRVATable(SymbolTable &symtab, SymbolRVASet tableSymbols,
+                              StringRef tableSym, StringRef countSym,
+                              bool hasFlag) {
   if (tableSymbols.empty())
     return;
 
@@ -2201,8 +2207,8 @@ void Writer::maybeAddRVATable(SymbolRVASet tableSymbols, StringRef tableSym,
     tableChunk = make<RVATableChunk>(std::move(tableSymbols));
   rdataSec->addChunk(tableChunk);
 
-  Symbol *t = ctx.symtab.findUnderscore(tableSym);
-  Symbol *c = ctx.symtab.findUnderscore(countSym);
+  Symbol *t = symtab.findUnderscore(tableSym);
+  Symbol *c = symtab.findUnderscore(countSym);
   replaceSymbol<DefinedSynthetic>(t, t->getName(), tableChunk);
   cast<DefinedAbsolute>(c)->setVA(tableChunk->getSize() / (hasFlag ? 5 : 4));
 }
