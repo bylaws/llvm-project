@@ -1705,7 +1705,7 @@ template <typename PEHeaderTy> void Writer::writeHeader() {
   // When run under Windows, the loader looks at AddressOfNewExeHeader and uses
   // the PE header instead.
   Configuration *config = &ctx.config;
-
+  SymbolTable &symtab = ctx.symtab;
   uint8_t *buf = buffer->getBufferStart();
   auto *dos = reinterpret_cast<dos_header *>(buf);
 
@@ -1745,16 +1745,7 @@ template <typename PEHeaderTy> void Writer::writeHeader() {
   assert(coffHeaderOffset == buf - buffer->getBufferStart());
   auto *coff = reinterpret_cast<coff_file_header *>(buf);
   buf += sizeof(*coff);
-  switch (config->machine) {
-  case ARM64EC:
-    coff->Machine = AMD64;
-    break;
-  case ARM64X:
-    coff->Machine = ARM64;
-    break;
-  default:
-    coff->Machine = config->machine;
-  }
+  coff->Machine = symtab.machine == ARM64EC ? AMD64 : symtab.machine;
   coff->NumberOfSections = ctx.outputSections.size();
   coff->Characteristics = IMAGE_FILE_EXECUTABLE_IMAGE;
   if (config->largeAddressAware)
@@ -1801,7 +1792,7 @@ template <typename PEHeaderTy> void Writer::writeHeader() {
   pe->SizeOfImage = sizeOfImage;
   pe->SizeOfHeaders = sizeOfHeaders;
   if (!config->noEntry) {
-    Defined *entry = cast<Defined>(ctx.symtab.entry);
+    Defined *entry = cast<Defined>(symtab.entry);
     pe->AddressOfEntryPoint = entry->getRVA();
     // Pointer to thumb code must have the LSB set, so adjust it.
     if (config->machine == ARMNT)
@@ -1880,7 +1871,7 @@ template <typename PEHeaderTy> void Writer::writeHeader() {
     dir[BASE_RELOCATION_TABLE].RelativeVirtualAddress = relocSec->getRVA();
     dir[BASE_RELOCATION_TABLE].Size = relocSize;
   }
-  if (Symbol *sym = ctx.symtab.findUnderscore("_tls_used")) {
+  if (Symbol *sym = symtab.findUnderscore("_tls_used")) {
     if (Defined *b = dyn_cast<Defined>(sym)) {
       dir[TLS_TABLE].RelativeVirtualAddress = b->getRVA();
       dir[TLS_TABLE].Size = config->is64()
