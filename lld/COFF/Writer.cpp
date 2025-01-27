@@ -2289,27 +2289,30 @@ void Writer::createRuntimePseudoRelocs() {
     return;
   }
 
-  if (!rels.empty()) {
-    Log(ctx) << "Writing " << rels.size() << " runtime pseudo relocations";
-    const char *symbolName = "_pei386_runtime_relocator";
-    Symbol *relocator = ctx.symtab.findUnderscore(symbolName);
-    if (!relocator)
-      Err(ctx)
-          << "output image has runtime pseudo relocations, but the function "
-          << symbolName
-          << " is missing; it is needed for fixing the relocations at runtime";
-  }
+  ctx.forEachSymtab([&](SymbolTable &symtab) {
+    if (!rels.empty()) {
+      Log(ctx) << "Writing " << Twine(rels.size())
+               << " runtime pseudo relocations";
+      const char *symbolName = "_pei386_runtime_relocator";
+      Symbol *relocator = symtab.findUnderscore(symbolName);
+      if (!relocator)
+        Err(ctx)
+            << "output image has runtime pseudo relocations, but the function "
+            << symbolName
+            << " is missing; it is needed for fixing the relocations at "
+               "runtime";
+    }
 
-  PseudoRelocTableChunk *table = make<PseudoRelocTableChunk>(rels);
-  rdataSec->addChunk(table);
-  EmptyChunk *endOfList = make<EmptyChunk>();
-  rdataSec->addChunk(endOfList);
+    PseudoRelocTableChunk *table = make<PseudoRelocTableChunk>(rels);
+    rdataSec->addChunk(table);
+    EmptyChunk *endOfList = make<EmptyChunk>();
+    rdataSec->addChunk(endOfList);
 
-  Symbol *headSym = ctx.symtab.findUnderscore("__RUNTIME_PSEUDO_RELOC_LIST__");
-  Symbol *endSym =
-      ctx.symtab.findUnderscore("__RUNTIME_PSEUDO_RELOC_LIST_END__");
-  replaceSymbol<DefinedSynthetic>(headSym, headSym->getName(), table);
-  replaceSymbol<DefinedSynthetic>(endSym, endSym->getName(), endOfList);
+    Symbol *headSym = symtab.findUnderscore("__RUNTIME_PSEUDO_RELOC_LIST__");
+    Symbol *endSym = symtab.findUnderscore("__RUNTIME_PSEUDO_RELOC_LIST_END__");
+    replaceSymbol<DefinedSynthetic>(headSym, headSym->getName(), table);
+    replaceSymbol<DefinedSynthetic>(endSym, endSym->getName(), endOfList);
+  });
 }
 
 // MinGW specific.
