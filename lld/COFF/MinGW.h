@@ -62,10 +62,10 @@ struct WrappedSymbol {
   Symbol *wrap;
 };
 
-std::vector<WrappedSymbol> addWrappedSymbols(COFFLinkerContext &ctx,
+std::vector<WrappedSymbol> addWrappedSymbols(SymbolTable &symtab,
                                              llvm::opt::InputArgList &args);
 
-void wrapSymbols(COFFLinkerContext &ctx, ArrayRef<WrappedSymbol> wrapped);
+void wrapSymbols(SymbolTable &symtab, ArrayRef<WrappedSymbol> wrapped);
 
 } // namespace lld::coff
 

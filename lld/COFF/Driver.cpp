@@ -2569,7 +2569,7 @@ void LinkerDriver::linkerMain(ArrayRef<const char *> argsArr) {
     ctx.symtab.addUndefinedGlob(pat);
 
   // Create wrapped symbols for -wrap option.
-  std::vector<WrappedSymbol> wrapped = addWrappedSymbols(ctx, args);
+  std::vector<WrappedSymbol> wrapped = addWrappedSymbols(mainSymtab, args);
   // Load more object files that might be needed for wrapped symbols.
   if (!wrapped.empty())
     while (run())
@@ -2643,8 +2643,10 @@ void LinkerDriver::linkerMain(ArrayRef<const char *> argsArr) {
   run();
 
   // Apply symbol renames for -wrap.
-  if (!wrapped.empty())
-    wrapSymbols(ctx, wrapped);
+  if (!wrapped.empty()) {
+    ctx.forEachSymtab(
+        [&](SymbolTable &symtab) { wrapSymbols(symtab, wrapped); });
+  }
 
   if (isArm64EC(config->machine))
     createECExportThunks();
