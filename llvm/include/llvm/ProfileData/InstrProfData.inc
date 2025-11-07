@@ -222,13 +222,16 @@ VALUE_PROF_KIND(IPVK_MemOPSize, 1, "memory intrinsic functions size")
  *  objects' MD5 hash.
  */
 VALUE_PROF_KIND(IPVK_VTableTarget, 2, "The profiled address point of the vtable")
+/* For function call argument value profiling. */
+VALUE_PROF_KIND(IPVK_ArgumentValue, 3, "function argument value")
+
 /* These two kinds must be the last to be
  * declared. This is to make sure the string
  * array created with the template can be
  * indexed with the kind value.
  */
 VALUE_PROF_KIND(IPVK_First, IPVK_IndirectCallTarget, "first")
-VALUE_PROF_KIND(IPVK_Last, IPVK_VTableTarget, "last")
+VALUE_PROF_KIND(IPVK_Last, IPVK_ArgumentValue, "last")
 
 #undef VALUE_PROF_KIND
 /* VALUE_PROF_KIND end */
