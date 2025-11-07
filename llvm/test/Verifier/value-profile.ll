@@ -18,7 +18,7 @@ define void @test(ptr %0) {
   call void %0(), !prof !0
   ret void
 }
-!0 = !{!"VP", i32 3, i32 20, i64 1234, i64 10, i64 5678, i64 5}
+!0 = !{!"VP", i32 4, i32 20, i64 1234, i64 10, i64 5678, i64 5}
 ; INVALID-KIND: Invalid VP !prof kind
 
 ;--- invalid-count.ll
