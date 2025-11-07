@@ -1,0 +1,97 @@
+# IR level Instrumentation Flag
+:ir
+_Z11constantArgi
+# Func Hash:
+742261418966908927
+# Num Counters:
+1
+# Counter Values:
+100
+
+_Z18biasedDistributioni
+# Func Hash:
+742261418966908927
+# Num Counters:
+1
+# Counter Values:
+500500
+
+_Z17multipleCallSitesi
+# Func Hash:
+742261418966908927
+# Num Counters:
+1
+# Counter Values:
+100
+
+_Z17multipleArgumentsiii
+# Func Hash:
+742261418966908927
+# Num Counters:
+1
+# Counter Values:
+100
+
+main
+# Func Hash:
+176885381138041240
+# Num Counters:
+9
+# Counter Values:
+500500
+100
+1000
+50
+50
+100
+1
+80
+70
+# Num Value Kinds:
+1
+# ValueKind = IPVK_ArgumentValue:
+3
+# NumValueSites:
+8
+1
+42:100
+24
+1000:505
+999:505
+998:505
+997:505
+996:505
+995:505
+994:505
+993:505
+992:505
+991:505
+990:505
+989:505
+988:505
+987:505
+986:505
+985:505
+984:504
+983:503
+982:502
+981:501
+980:500
+979:499
+978:498
+977:497
+1
+100:50
+1
+200:50
+2
+10:80
+20:20
+1
+777:100
+2
+5:70
+15:30
+1
+1001604600:1
+
