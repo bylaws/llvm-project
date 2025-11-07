@@ -235,6 +235,12 @@ cl::opt<bool> EnableVTableProfileUse(
              "profiles will be used by ICP pass for more efficient indirect "
              "call sequence. If false, type profiles won't be used."));
 
+cl::opt<bool> EnableArgumentValueProfiling(
+    "enable-argument-value-profiling", cl::init(false),
+    cl::desc("If true, argument values will be profiled at every callsite. "
+	     "This information will be used by the function specialization "
+             "pass for specialization on non-constant arguments."));
+
 std::string getInstrProfSectionName(InstrProfSectKind IPSK,
                                     Triple::ObjectFormatType OF,
                                     bool AddSegmentInfo) {

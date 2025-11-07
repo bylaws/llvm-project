@@ -120,8 +120,50 @@ public:
   }
 };
 
+///------------------------ ArgumentValueSpecializationPlugin ------------------------
+struct PGODirectCallVisitor : public InstVisitor<PGODirectCallVisitor> {
+  std::vector<CallInst *> Calls;
+
+  void visitCallInst(CallInst &Call) {
+    if (Call.isIndirectCall()) {
+      return;
+    }
+
+    Calls.push_back(&Call);
+  }
+};
+
+inline std::vector<CallInst *> findDirectCalls(Function &F) {
+  PGODirectCallVisitor CV;
+  CV.visit(F);
+  return CV.Calls;
+}
+
+class ArgumentValueSpecializationPlugin {
+  Function &F;
+
+public:
+  static constexpr InstrProfValueKind Kind = IPVK_ArgumentValue;
+
+  ArgumentValueSpecializationPlugin(Function &Fn, TargetLibraryInfo &TLI) : F(Fn) {}
+
+  void run(std::vector<CandidateInfo> &Candidates) {
+    std::vector<CallInst *> Result = findDirectCalls(F);
+    for (CallInst *I : Result) {
+      Instruction *InsertPt = I;
+      Instruction *AnnotatedInst = I;
+      for (Value *V : I->args()) {
+        Type *T = V->getType();
+        if (T->isIntegerTy()) {
+          Candidates.emplace_back(CandidateInfo{V, InsertPt, AnnotatedInst});
+        }
+      }
+    }
+  }
+};
+
 ///----------------------- Registration of the plugins -------------------------
 /// For now, registering a plugin with the ValueProfileCollector is done by
 /// adding the plugin type to the VP_PLUGIN_LIST macro.
 #define VP_PLUGIN_LIST                                                         \
-  MemIntrinsicPlugin, IndirectCallPromotionPlugin, VTableProfilingPlugin
+  MemIntrinsicPlugin, IndirectCallPromotionPlugin, VTableProfilingPlugin, ArgumentValueSpecializationPlugin

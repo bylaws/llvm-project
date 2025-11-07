@@ -360,6 +360,7 @@ extern cl::opt<std::string> ViewBlockFreqFuncName;
 // ProfileData/InstrProf.cpp: -enable-vtable-value-profiling=
 extern cl::opt<bool> EnableVTableValueProfiling;
 extern cl::opt<bool> EnableVTableProfileUse;
+extern cl::opt<bool> EnableArgumentValueProfiling;
 LLVM_ABI extern cl::opt<InstrProfCorrelator::ProfCorrelatorKind>
     ProfileCorrelate;
 } // namespace llvm
@@ -668,6 +669,8 @@ public:
       ValueSites[IPVK_IndirectCallTarget] = VPC.get(IPVK_IndirectCallTarget);
       if (EnableVTableValueProfiling)
         ValueSites[IPVK_VTableTarget] = VPC.get(IPVK_VTableTarget);
+      if (EnableArgumentValueProfiling)
+        ValueSites[IPVK_ArgumentValue] = VPC.get(IPVK_ArgumentValue);
     } else {
       NumOfCSPGOSelectInsts += SIVisitor.getNumOfSelectInsts();
       NumOfCSPGOMemIntrinsics += ValueSites[IPVK_MemOPSize].size();
