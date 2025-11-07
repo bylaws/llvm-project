@@ -1072,10 +1072,17 @@ void FunctionInstrumenter::instrument() {
              "Cannot get the Instrumentation point");
 
       Value *ToProfile = nullptr;
-      if (Cand.V->getType()->isIntegerTy())
+      Type *T = Cand.V->getType();
+      if (T->isIntegerTy())
         ToProfile = Builder.CreateZExtOrTrunc(Cand.V, Builder.getInt64Ty());
-      else if (Cand.V->getType()->isPointerTy())
+      else if (T->isPointerTy())
         ToProfile = Builder.CreatePtrToInt(Cand.V, Builder.getInt64Ty());
+      else if (T->isFloatTy())
+        ToProfile = Builder.CreateZExtOrTrunc(Builder.CreateBitCast(Cand.V, Builder.getInt32Ty()),
+                                              Builder.getInt64Ty());
+      else if (T->isDoubleTy())
+        ToProfile = Builder.CreateBitCast(Cand.V, Builder.getInt64Ty());
+
       assert(ToProfile && "value profiling Value is of unexpected type");
 
       auto *NormalizedNamePtr = ConstantExpr::getPointerBitCastOrAddrSpaceCast(

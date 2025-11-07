@@ -55,7 +55,7 @@
 // CHECK-DAG:       [  6, 15, 30 ] (30.00%)
 
 // Site 7
-// CHECK-DAG:       [  7, 333932400, 1 ] (100.00%)
+// CHECK-DAG:       [  7, 1001604600, 1 ] (100.00%)
 
 // CHECK: Instrumentation level: IR  entry_first = 0
 // CHECK: Functions shown: 1
@@ -117,7 +117,7 @@
 // ARGTEXT: 15:30
 // Site 7
 // ARGTEXT: 1
-// ARGTEXT: 333932400:1
+// ARGTEXT: 1001604600:1
 
 //--- lib.h
 #include <stdio.h>
