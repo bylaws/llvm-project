@@ -418,6 +418,11 @@ static cl::opt<bool> ShowMemOPSizes(
     cl::desc("Show the profiled sizes of the memory intrinsic calls "
              "for shown functions"),
     cl::sub(ShowSubcommand));
+static cl::opt<bool> ShowArgumentValues(
+    "argument-values", cl::init(false),
+    cl::desc("Show the profiled argument values of function calls "
+             "for shown functions"),
+    cl::sub(ShowSubcommand));
 static cl::opt<bool>
     ShowDetailedSummary("detailed-summary", cl::init(false),
                         cl::desc("Show detailed profile summary"),
@@ -2981,6 +2986,11 @@ static int showInstrProfile(ShowFormat SFormat, raw_fd_ostream &OS) {
         OS << "    Number of Memory Intrinsics Calls: " << NumMemOPCalls
            << "\n";
 
+      uint32_t NumArgumentValues = Func.getNumValueSites(IPVK_ArgumentValue);
+      if (ShowArgumentValues)
+        OS << "    Number of instrumented argument values: "
+           << NumArgumentValues << "\n";
+
       if (ShowCounts) {
         OS << "    Block counts: [";
         size_t Start = (IsIRInstr ? 0 : 1);
@@ -3007,6 +3017,12 @@ static int showInstrProfile(ShowFormat SFormat, raw_fd_ostream &OS) {
       if (ShowMemOPSizes && NumMemOPCalls > 0) {
         OS << "    Memory Intrinsic Size Results:\n";
         traverseAllValueSites(Func, IPVK_MemOPSize, VPStats[IPVK_MemOPSize], OS,
+                              nullptr);
+      }
+
+      if (ShowArgumentValues && NumArgumentValues >  0) {
+        OS << "    Argument Value Results:\n";
+        traverseAllValueSites(Func, IPVK_ArgumentValue, VPStats[IPVK_ArgumentValue], OS,
                               nullptr);
       }
     }
@@ -3060,6 +3076,11 @@ static int showInstrProfile(ShowFormat SFormat, raw_fd_ostream &OS) {
   if (ShownFunctions && ShowMemOPSizes) {
     OS << "Statistics for memory intrinsic calls sizes profile:\n";
     showValueSitesStats(OS, IPVK_MemOPSize, VPStats[IPVK_MemOPSize]);
+  }
+
+  if (ShownFunctions && ShowArgumentValues) {
+    OS << "Statistics for argument values profile:\n";
+    showValueSitesStats(OS, IPVK_ArgumentValue, VPStats[IPVK_ArgumentValue]);
   }
 
   if (ShowDetailedSummary)

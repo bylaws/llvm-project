@@ -1,0 +1,87 @@
+; RUN: rm -rf %t && mkdir %t
+
+; Generate indexed profiles from text profiles
+RUN: llvm-profdata merge %S/Inputs/argument-value-prof.proftext -o %t/indexed.profdata
+
+; Show indexed profiles
+RUN: llvm-profdata show --function=main --argument-values %t/indexed.profdata | FileCheck %s --check-prefix=INDEXED
+
+; Show text profiles
+RUN: llvm-profdata show --function=main --argument-values --text %S/Inputs/argument-value-prof.proftext | FileCheck %s --check-prefix=ARGTEXT
+
+; Convert indexed profiles to its textual output and show it.
+RUN: llvm-profdata merge --text -o %t/text-from-indexed.proftext %t/indexed.profdata
+RUN: llvm-profdata show --function=main --argument-values %t/text-from-indexed.proftext | FileCheck %s --check-prefix=INDEXED
+RUN: llvm-profdata show --function=main --argument-values --text %t/text-from-indexed.proftext | FileCheck %s --check-prefix=ARGTEXT
+
+INDEXED: Counters:
+INDEXED:   main:
+INDEXED:   Hash: 0x{{[0-9a-f]+}}
+INDEXED:   Counters: 9
+INDEXED:   Number of instrumented argument values: 8
+INDEXED:  Argument Value Results:
+INDEXED-DAG:       [  0, 42, 100 ] (100.00%)
+INDEXED-DAG:       [  1, 1000, {{[0-9]+}} ]
+INDEXED-DAG:       [  1,  999, {{[0-9]+}} ]
+INDEXED-DAG:       [  1,  998, {{[0-9]+}} ]
+INDEXED-DAG:       [  1,  997, {{[0-9]+}} ]
+INDEXED-DAG:       [  2, 100, 50 ] (100.00%)
+INDEXED-DAG:       [  3, 200, 50 ] (100.00%)
+INDEXED-DAG:       [  4, 10, 80 ] (80.00%)
+INDEXED-DAG:       [  4, 20, 20 ] (20.00%)
+INDEXED-DAG:       [  5, 777, 100 ] (100.00%)
+INDEXED-DAG:       [  6, 5, 70 ] (70.00%)
+INDEXED-DAG:       [  6, 15, 30 ] (30.00%)
+INDEXED-DAG:       [  7, 1001604600, 1 ] (100.00%)
+INDEXED: Instrumentation level: IR  entry_first = 0
+INDEXED: Functions shown: 1
+INDEXED: Total functions: 5
+INDEXED: Statistics for argument values profile:
+INDEXED:   Total number of sites: 8
+INDEXED:   Total number of sites with values: 8
+INDEXED:   Total number of profiled values: 33
+INDEXED:   Value sites histogram:
+INDEXED:     NumTargets, SiteCount
+INDEXED:     1, 5
+INDEXED:     2, 2
+INDEXED:     24, 1
+
+ARGTEXT: :ir
+ARGTEXT: main
+ARGTEXT: # Func Hash:
+ARGTEXT: {{[0-9]+}}
+ARGTEXT: # Num Counters:
+ARGTEXT: 9
+ARGTEXT: # Counter Values:
+ARGTEXT: 500500
+ARGTEXT: 100
+ARGTEXT: 1000
+ARGTEXT: 50
+ARGTEXT: 50
+ARGTEXT: 100
+ARGTEXT: # Num Value Kinds:
+ARGTEXT: 1
+ARGTEXT: # ValueKind = IPVK_ArgumentValue:
+ARGTEXT: 3
+ARGTEXT: # NumValueSites:
+ARGTEXT: 8
+ARGTEXT: 1
+ARGTEXT: 42:100
+ARGTEXT: 24
+ARGTEXT-DAG: 1000:{{[0-9]+}}
+ARGTEXT-DAG: 999:{{[0-9]+}}
+ARGTEXT-DAG: 998:{{[0-9]+}}
+ARGTEXT: 1
+ARGTEXT: 100:50
+ARGTEXT: 1
+ARGTEXT: 200:50
+ARGTEXT: 2
+ARGTEXT: 10:80
+ARGTEXT: 20:20
+ARGTEXT: 1
+ARGTEXT: 777:100
+ARGTEXT: 2
+ARGTEXT: 5:70
+ARGTEXT: 15:30
+ARGTEXT: 1
+ARGTEXT: 1001604600:1
