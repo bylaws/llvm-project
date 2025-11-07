@@ -154,7 +154,7 @@ public:
       Instruction *AnnotatedInst = I;
       for (Value *V : I->args()) {
         Type *T = V->getType();
-        if (T->isIntegerTy()) {
+        if (T->isIntegerTy() || T->isFloatTy() || T->isDoubleTy()) {
           Candidates.emplace_back(CandidateInfo{V, InsertPt, AnnotatedInst});
         }
       }
