@@ -5051,23 +5051,48 @@ void Verifier::visitProfMetadata(Instruction &I, MDNode *MD) {
     }
   } else if (ProfName == MDProfLabels::ValueProfile) {
     Check(isValueProfileMD(MD), "invalid value profiling metadata", MD);
-    ConstantInt *KindInt = mdconst::dyn_extract<ConstantInt>(MD->getOperand(1));
-    Check(KindInt, "VP !prof missing kind argument", MD);
+    unsigned Idx = 1;
+    const unsigned NumOperands = MD->getNumOperands();
 
-    auto Kind = KindInt->getZExtValue();
-    Check(Kind >= InstrProfValueKind::IPVK_First &&
-              Kind <= InstrProfValueKind::IPVK_Last,
-          "Invalid VP !prof kind", MD);
-    Check(MD->getNumOperands() % 2 == 1,
-          "VP !prof should have an even number "
-          "of arguments after 'VP'",
-          MD);
-    if (Kind == InstrProfValueKind::IPVK_IndirectCallTarget ||
-        Kind == InstrProfValueKind::IPVK_MemOPSize)
-      Check(isa<CallBase>(I),
-            "VP !prof indirect call or memop size expected to be applied to "
-            "CallBase instructions only",
-            MD);
+    while (Idx < NumOperands) {
+      ConstantInt *KindInt =
+          mdconst::dyn_extract<ConstantInt>(MD->getOperand(Idx));
+      Check(KindInt, "VP !prof value kind must be a const int", MD,
+            MD->getOperand(Idx));
+
+      auto Kind = KindInt->getZExtValue();
+      Check(Kind >= InstrProfValueKind::IPVK_First &&
+                Kind <= InstrProfValueKind::IPVK_Last,
+            "Invalid VP !prof kind", MD, KindInt);
+
+      if (Kind == InstrProfValueKind::IPVK_IndirectCallTarget ||
+          Kind == InstrProfValueKind::IPVK_MemOPSize)
+        Check(isa<CallBase>(I),
+              "VP !prof indirect call or memop size expected to be applied to "
+              "CallBase instructions only",
+              MD);
+
+      Idx++;
+      Check(Idx < NumOperands, "VP !prof missing total count for site", MD);
+      ConstantInt *TotalCountInt =
+          mdconst::dyn_extract<ConstantInt>(MD->getOperand(Idx));
+      Check(TotalCountInt, "VP !prof total count must be a const int", MD,
+            MD->getOperand(Idx));
+
+      Idx++;
+      Check(Idx < NumOperands, "VP !prof missing number of entries for site", MD);
+      ConstantInt *NumEntriesInt =
+          mdconst::dyn_extract<ConstantInt>(MD->getOperand(Idx));
+      Check(NumEntriesInt, "VP !prof number of entries must be a const int",
+            MD, MD->getOperand(Idx));
+
+      uint64_t NumEntries = NumEntriesInt->getZExtValue();
+
+      Idx += NumEntries * 2 + 1;
+      Check(Idx <= NumOperands,
+            "VP !prof is too small for its associated entry count",
+            MD, NumEntriesInt);
+    }
   } else {
     CheckFailed("expected either branch_weights or VP profile name", MD);
   }

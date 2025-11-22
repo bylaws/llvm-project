@@ -337,7 +337,7 @@ LLVM_ABI void annotateValueSite(Module &M, Instruction &Inst,
 LLVM_ABI SmallVector<InstrProfValueData, 4>
 getValueProfDataFromInst(const Instruction &Inst, InstrProfValueKind ValueKind,
                          uint32_t MaxNumValueData, uint64_t &TotalC,
-                         bool GetNoICPValue = false);
+                         bool GetNoICPValue = false, uint32_t Index = 0);
 
 inline StringRef getPGOFuncNameMetadataName() { return "PGOFuncName"; }
 
