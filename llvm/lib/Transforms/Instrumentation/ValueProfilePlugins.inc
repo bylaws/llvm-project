@@ -121,20 +121,26 @@ public:
 };
 
 ///------------------------ ArgumentValueSpecializationPlugin ------------------------
-struct PGODirectCallVisitor : public InstVisitor<PGODirectCallVisitor> {
-  std::vector<CallInst *> Calls;
+struct PGODirectCallSiteVisitor : public InstVisitor<PGODirectCallSiteVisitor> {
+  std::vector<CallBase *> Calls;
 
   void visitCallInst(CallInst &Call) {
     if (Call.isIndirectCall()) {
       return;
     }
-
     Calls.push_back(&Call);
+  }
+
+  void visitInvokeInst(InvokeInst &Invoke) {
+    if (Invoke.isIndirectCall()) {
+      return;
+    }
+    Calls.push_back(&Invoke);
   }
 };
 
-inline std::vector<CallInst *> findDirectCalls(Function &F) {
-  PGODirectCallVisitor CV;
+inline std::vector<CallBase *> findDirectCallSites(Function &F) {
+  PGODirectCallSiteVisitor CV;
   CV.visit(F);
   return CV.Calls;
 }
@@ -148,10 +154,12 @@ public:
   ArgumentValueSpecializationPlugin(Function &Fn, TargetLibraryInfo &TLI) : F(Fn) {}
 
   void run(std::vector<CandidateInfo> &Candidates) {
-    std::vector<CallInst *> Result = findDirectCalls(F);
-    for (CallInst *I : Result) {
+    std::vector<CallBase *> Result = findDirectCallSites(F);
+
+    for (CallBase *I : Result) {
       Instruction *InsertPt = I;
       Instruction *AnnotatedInst = I;
+
       for (Value *V : I->args()) {
         Type *T = V->getType();
         if (T->isIntegerTy() || T->isFloatTy() || T->isDoubleTy()) {
