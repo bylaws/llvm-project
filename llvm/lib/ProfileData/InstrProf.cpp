@@ -1351,23 +1351,51 @@ void annotateValueSite(Module &M, Instruction &Inst,
   annotateValueSite(M, Inst, VDs, Sum, ValueKind, MaxMDCount);
 }
 
+MDNode *mayHaveValueProfile(const Instruction &Inst) {
+  MDNode *MD = Inst.getMetadata(LLVMContext::MD_prof);
+  if (!MD)
+    return nullptr;
+
+  if (MD->getNumOperands() < 4)
+    return nullptr;
+
+  MDString *Tag = cast<MDString>(MD->getOperand(0));
+  if (!Tag || Tag->getString() != MDProfLabels::ValueProfile)
+    return nullptr;
+
+  return MD;
+}
+
 void annotateValueSite(Module &M, Instruction &Inst,
                        ArrayRef<InstrProfValueData> VDs,
                        uint64_t Sum, InstrProfValueKind ValueKind,
                        uint32_t MaxMDCount) {
   if (VDs.empty())
     return;
+
   LLVMContext &Ctx = M.getContext();
   MDBuilder MDHelper(Ctx);
   SmallVector<Metadata *, 3> Vals;
-  // Tag
-  Vals.push_back(MDHelper.createString(MDProfLabels::ValueProfile));
+
+  // Append contents to existing value profiling node if present
+  MDNode *Base = mayHaveValueProfile(Inst);
+  if (Base) {
+    Vals.insert(Vals.begin(), Base->op_begin(), Base->op_end());
+  } else {
+    // Tag
+    Vals.push_back(MDHelper.createString(MDProfLabels::ValueProfile));
+  }
+
   // Value Kind
   Vals.push_back(MDHelper.createConstant(
       ConstantInt::get(Type::getInt32Ty(Ctx), ValueKind)));
   // Total Count
   Vals.push_back(
       MDHelper.createConstant(ConstantInt::get(Type::getInt64Ty(Ctx), Sum)));
+  // Value Profile Data Count
+  int misn = std::min<int32_t>(MaxMDCount, static_cast<int32_t>(VDs.size()) );
+  Vals.push_back(MDHelper.createConstant(
+      ConstantInt::get(Type::getInt32Ty(Ctx), misn)));
 
   // Value Profile Data
   uint32_t MDCount = MaxMDCount;
@@ -1382,65 +1410,69 @@ void annotateValueSite(Module &M, Instruction &Inst,
   Inst.setMetadata(LLVMContext::MD_prof, MDNode::get(Ctx, Vals));
 }
 
-MDNode *mayHaveValueProfileOfKind(const Instruction &Inst,
-                                  InstrProfValueKind ValueKind) {
-  MDNode *MD = Inst.getMetadata(LLVMContext::MD_prof);
-  if (!MD)
-    return nullptr;
-
-  if (MD->getNumOperands() < 5)
-    return nullptr;
-
-  MDString *Tag = cast<MDString>(MD->getOperand(0));
-  if (!Tag || Tag->getString() != MDProfLabels::ValueProfile)
-    return nullptr;
-
-  // Now check kind:
-  ConstantInt *KindInt = mdconst::dyn_extract<ConstantInt>(MD->getOperand(1));
-  if (!KindInt)
-    return nullptr;
-  if (KindInt->getZExtValue() != ValueKind)
-    return nullptr;
-
-  return MD;
-}
-
 SmallVector<InstrProfValueData, 4>
 getValueProfDataFromInst(const Instruction &Inst, InstrProfValueKind ValueKind,
                          uint32_t MaxNumValueData, uint64_t &TotalC,
-                         bool GetNoICPValue) {
+                         bool GetNoICPValue, uint32_t Index) {
   // Four inline elements seem to work well in practice.  With MaxNumValueData,
   // this array won't grow very big anyway.
   SmallVector<InstrProfValueData, 4> ValueData;
-  MDNode *MD = mayHaveValueProfileOfKind(Inst, ValueKind);
+  MDNode *MD = mayHaveValueProfile(Inst);
   if (!MD)
     return ValueData;
-  const unsigned NOps = MD->getNumOperands();
-  // Get total count
-  ConstantInt *TotalCInt = mdconst::dyn_extract<ConstantInt>(MD->getOperand(2));
-  if (!TotalCInt)
-    return ValueData;
-  TotalC = TotalCInt->getZExtValue();
 
-  ValueData.reserve((NOps - 3) / 2);
-  for (unsigned I = 3; I < NOps; I += 2) {
-    if (ValueData.size() >= MaxNumValueData)
-      break;
-    ConstantInt *Value = mdconst::dyn_extract<ConstantInt>(MD->getOperand(I));
-    ConstantInt *Count =
-        mdconst::dyn_extract<ConstantInt>(MD->getOperand(I + 1));
-    if (!Value || !Count) {
-      ValueData.clear();
+  const unsigned NOps = MD->getNumOperands();
+  unsigned I = 1;
+  std::array<uint32_t, IPVK_Last + 1> Indices{};
+  while (I + 2 < NOps) {
+    auto *EntryKindInt = mdconst::dyn_extract<ConstantInt>(MD->getOperand(I++));
+    if (!EntryKindInt)
+      return ValueData;
+    auto EntryKind = EntryKindInt->getZExtValue();
+
+    ConstantInt *TotalCInt = mdconst::dyn_extract<ConstantInt>(MD->getOperand(I++));
+    if (!TotalCInt)
+      return ValueData;
+
+    auto *EntryDataCountInt = mdconst::dyn_extract<ConstantInt>(MD->getOperand(I++));
+    if (!EntryDataCountInt)
+      return ValueData;
+    auto EntryDataCount = EntryDataCountInt->getZExtValue();
+    auto EntryEnd = I + EntryDataCount * 2;
+
+    if (EntryKind == ValueKind && Indices[EntryKind] == Index) {
+      // Get total count
+      TotalC = TotalCInt->getZExtValue();
+
+      ValueData.reserve(EntryDataCount);
+
+      for (; I < EntryEnd; I += 2) {
+        if (ValueData.size() >= MaxNumValueData)
+          break;
+        ConstantInt *Value = mdconst::dyn_extract<ConstantInt>(MD->getOperand(I));
+        ConstantInt *Count =
+            mdconst::dyn_extract<ConstantInt>(MD->getOperand(I + 1));
+        if (!Value || !Count) {
+          ValueData.clear();
+          return ValueData;
+        }
+        uint64_t CntValue = Count->getZExtValue();
+        if (!GetNoICPValue && (CntValue == NOMORE_ICP_MAGICNUM))
+          continue;
+        InstrProfValueData V;
+        V.Value = Value->getZExtValue();
+        V.Count = CntValue;
+        ValueData.push_back(V);
+      }
+
       return ValueData;
     }
-    uint64_t CntValue = Count->getZExtValue();
-    if (!GetNoICPValue && (CntValue == NOMORE_ICP_MAGICNUM))
-      continue;
-    InstrProfValueData V;
-    V.Value = Value->getZExtValue();
-    V.Count = CntValue;
-    ValueData.push_back(V);
+
+    Indices[EntryKind]++;
+    I = EntryEnd;
   }
+
+  // Did not find a match
   return ValueData;
 }
 

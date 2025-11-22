@@ -42,7 +42,7 @@ namespace {
 constexpr unsigned MinBWOps = 3;
 
 // the minimum number of operands for MD_prof nodes with value profiles
-constexpr unsigned MinVPOps = 5;
+constexpr unsigned MinVPOps = 6;
 
 // We may want to add support for other MD_prof types, so provide an abstraction
 // for checking the metadata type.
@@ -286,41 +286,63 @@ void scaleProfData(Instruction &I, uint64_t S, uint64_t T) {
     return;
 
   LLVMContext &C = I.getContext();
-
   MDBuilder MDB(C);
+
+  auto getCountFromMD = [](Metadata *MD) -> uint64_t {
+    auto *CI = mdconst::dyn_extract<ConstantInt>(MD);
+    return CI->getValue().getZExtValue();
+  };
+
+  APInt APS(128, S), APT(128, T);
+  auto getScaledAPInt = [&](uint64_t Count) -> APInt {
+    APInt Val(128, Count);
+    Val *= APS;
+    return Val.udiv(APT);
+  };
+
   SmallVector<Metadata *, 3> Vals;
   Vals.push_back(ProfileData->getOperand(0));
-  APInt APS(128, S), APT(128, T);
+
   if (ProfDataName->getString() == MDProfLabels::BranchWeights &&
       ProfileData->getNumOperands() > 0) {
-    // Using APInt::div may be expensive, but most cases should fit 64 bits.
-    APInt Val(128,
-              mdconst::dyn_extract<ConstantInt>(
-                  ProfileData->getOperand(getBranchWeightOffset(ProfileData)))
-                  ->getValue()
-                  .getZExtValue());
-    Val *= APS;
+
+    uint64_t BranchCount = getCountFromMD(
+        ProfileData->getOperand(getBranchWeightOffset(ProfileData)));
+
+    APInt ScaledCount = getScaledAPInt(BranchCount);
     Vals.push_back(MDB.createConstant(ConstantInt::get(
-        Type::getInt32Ty(C), Val.udiv(APT).getLimitedValue(UINT32_MAX))));
-  } else if (ProfDataName->getString() == MDProfLabels::ValueProfile)
-    for (unsigned Idx = 1; Idx < ProfileData->getNumOperands(); Idx += 2) {
-      // The first value is the key of the value profile, which will not change.
-      Vals.push_back(ProfileData->getOperand(Idx));
-      uint64_t Count =
-          mdconst::dyn_extract<ConstantInt>(ProfileData->getOperand(Idx + 1))
-              ->getValue()
-              .getZExtValue();
-      // Don't scale the magic number.
-      if (Count == NOMORE_ICP_MAGICNUM) {
-        Vals.push_back(ProfileData->getOperand(Idx + 1));
-        continue;
-      }
-      // Using APInt::div may be expensive, but most cases should fit 64 bits.
-      APInt Val(128, Count);
-      Val *= APS;
+        Type::getInt32Ty(C), ScaledCount.getLimitedValue(UINT32_MAX))));
+  } else if (ProfDataName->getString() == MDProfLabels::ValueProfile) {
+    unsigned Idx = 1;
+    while (Idx < ProfileData->getNumOperands()) {
+      // Indirect Profile Value Kind
+      Vals.push_back(ProfileData->getOperand(Idx++));
+
+      // Total Count
+      uint64_t TotalCount = getCountFromMD(ProfileData->getOperand(Idx++));
+      APInt ScaledTotalCount = getScaledAPInt(TotalCount);
       Vals.push_back(MDB.createConstant(ConstantInt::get(
-          Type::getInt64Ty(C), Val.udiv(APT).getLimitedValue())));
+          Type::getInt64Ty(C), ScaledTotalCount.getLimitedValue())));
+
+      // Data Item Count
+      Metadata *NumItemsMD = ProfileData->getOperand(Idx++);
+      uint64_t NumItems = getCountFromMD(NumItemsMD);
+      Vals.push_back(NumItemsMD);
+
+      unsigned EntryEnd = Idx + NumItems * 2;
+      for (; Idx < EntryEnd; Idx += 2) {
+        // Value
+        Vals.push_back(ProfileData->getOperand(Idx));
+
+        // Count
+        uint64_t EntryCount = getCountFromMD(ProfileData->getOperand(Idx + 1));
+        APInt ScaledEntryCount = getScaledAPInt(EntryCount);
+        Vals.push_back(MDB.createConstant(ConstantInt::get(
+            Type::getInt64Ty(C), ScaledEntryCount.getLimitedValue())));
+      }
     }
+  }
+
   I.setMetadata(LLVMContext::MD_prof, MDNode::get(C, Vals));
 }
 
