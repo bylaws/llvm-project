@@ -1,0 +1,546 @@
+//===- PGOFunctionSpecialization.cpp - PGO Function Specialization --------===//
+//
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//===----------------------------------------------------------------------===//
+
+#include "llvm/Transforms/IPO/PGOFunctionSpecialization.h"
+#include "llvm/ADT/Statistic.h"
+#include "llvm/Analysis/CodeMetrics.h"
+#include "llvm/Analysis/ConstantFolding.h"
+#include "llvm/Analysis/InlineCost.h"
+#include "llvm/Analysis/InstructionSimplify.h"
+#include "llvm/Analysis/TargetLibraryInfo.h"
+#include "llvm/Analysis/TargetTransformInfo.h"
+#include "llvm/Analysis/ValueLattice.h"
+#include "llvm/Analysis/ValueLatticeUtils.h"
+#include "llvm/Analysis/ValueTracking.h"
+#include "llvm/IR/Dominators.h"
+#include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/IntrinsicInst.h"
+#include "llvm/ProfileData/InstrProf.h"
+#include "llvm/IR/PassManager.h"
+#include "llvm/Passes/PassBuilder.h"
+#include "llvm/Transforms/AggressiveInstCombine/AggressiveInstCombine.h"
+#include "llvm/Transforms/InstCombine/InstCombine.h"
+#include "llvm/Transforms/Scalar/ADCE.h"
+#include "llvm/Transforms/Scalar/EarlyCSE.h"
+#include "llvm/Transforms/Scalar/JumpThreading.h"
+#include "llvm/Transforms/Scalar/LoopFlatten.h"
+#include "llvm/Transforms/Scalar/IndVarSimplify.h"
+#include "llvm/Transforms/Scalar/LoopIdiomRecognize.h"
+#include "llvm/Transforms/Scalar/LoopInstSimplify.h"
+#include "llvm/Transforms/Scalar/LoopSimplifyCFG.h"
+#include "llvm/Transforms/Scalar/LoopDeletion.h"
+#include "llvm/Transforms/Scalar/LoopRotation.h"
+#include "llvm/Transforms/Scalar/LoopSink.h"
+#include "llvm/Transforms/Scalar/SimpleLoopUnswitch.h"
+#include "llvm/Transforms/Scalar/LoopUnrollAndJamPass.h"
+#include "llvm/Transforms/Scalar/LoopUnrollPass.h"
+#include "llvm/Transforms/Scalar/GVN.h"
+#include "llvm/Transforms/Scalar/SimplifyCFG.h"
+#include "llvm/Transforms/Scalar/SROA.h"
+#include "llvm/Transforms/Utils/BasicBlockUtils.h"
+#include "llvm/Transforms/Utils/Cloning.h"
+#include "llvm/Transforms/Utils/SizeOpts.h"
+#include <cmath>
+
+using namespace llvm;
+
+#define DEBUG_TYPE "pgo-function-specialization"
+
+STATISTIC(NumSpecsCreated, "Number of specializations created");
+
+static cl::opt<bool> ForceSpecialization(
+    "force-pgo-specialization", cl::init(false), cl::Hidden,
+    cl::desc(
+        "Force function specialization for every call site with a constant "
+        "argument"));
+
+static cl::opt<unsigned> MinFunctionSize(
+    "pgofuncspec-min-function-size", cl::init(50), cl::Hidden,
+    cl::desc("Don't specialize functions that have less than this number of "
+             "instructions"));
+
+static cl::opt<unsigned> AnalysisCutoffThresh(
+    "pgofuncspec-analysis-cutoff-thresh", cl::init(10), cl::Hidden,
+    cl::desc("TODO"));
+
+static cl::opt<unsigned> CandidateCutoffThresh(
+    "pgofuncspec-candidate-cutoff-thresh", cl::init(90), cl::Hidden,
+    cl::desc("TODO"));
+
+static cl::opt<unsigned> HotFuncThresh(
+    "pgofuncspec-hot-func-thresh", cl::init(5000), cl::Hidden,
+    cl::desc("TODO"));
+
+Function *PGOFunctionSpecializer::cloneFunctionSpecialized(Function *F, 
+                                                            Argument *Arg,
+                                                            Constant *C) {
+  ValueToValueMapTy VMap;
+  
+  // TODO: need _ZL15do_swizzle_copyILm0EEvPcS0_m to opt properly
+  Function *ClonedF = CloneFunction(F, VMap);
+  ClonedF->setLinkage(GlobalValue::InternalLinkage);
+  Argument *ClonedArg = ClonedF->getArg(Arg->getArgNo());
+  ClonedArg->replaceAllUsesWith(C);
+  FunctionPassManager FPM;
+
+  FPM.addPass(InstCombinePass());
+  FPM.addPass(
+      SimplifyCFGPass(SimplifyCFGOptions().convertSwitchRangeToICmp(true)));
+
+  FPM.addPass(SROAPass(SROAOptions::ModifyCFG));
+
+  FPM.addPass(EarlyCSEPass(false));
+  FPM.addPass(InstCombinePass());
+  FPM.addPass(
+      SimplifyCFGPass(SimplifyCFGOptions().convertSwitchRangeToICmp(true)));
+  LoopPassManager LPM1, LPM2;
+  LPM1.addPass(LoopInstSimplifyPass());
+  LPM1.addPass(LoopSimplifyCFGPass());
+  LPM1.addPass(LoopRotatePass(true, false));
+  LPM1.addPass(SimpleLoopUnswitchPass());
+  LPM1.addPass(LoopSimplifyCFGPass());
+  LPM2.addPass(LoopIdiomRecognizePass());
+  LPM2.addPass(IndVarSimplifyPass());
+  LPM2.addPass(LoopDeletionPass());
+  LPM2.addPass(LoopFullUnrollPass(OptLevel, false, false));
+  FPM.addPass(createFunctionToLoopPassAdaptor(std::move(LPM1),
+                                              /*UseMemorySSA=*/false,
+                                              /*UseBlockFrequencyInfo=*/false));
+  FPM.addPass(
+      SimplifyCFGPass(SimplifyCFGOptions().convertSwitchRangeToICmp(true)));
+  FPM.addPass(InstCombinePass());
+  FPM.addPass(createFunctionToLoopPassAdaptor(std::move(LPM2),
+                                              /*UseMemorySSA=*/false,
+                                              /*UseBlockFrequencyInfo=*/false));
+
+  FPM.addPass(SCCPPass());
+  FPM.addPass(InstCombinePass());
+  FPM.addPass(ADCEPass());
+  FPM.addPass(
+      SimplifyCFGPass(SimplifyCFGOptions().convertSwitchRangeToICmp(true)));
+
+  FPM.run(*ClonedF, *FAM);
+
+  return ClonedF;
+}
+
+std::pair<unsigned, unsigned> PGOFunctionSpecializer::calculateFunctionSizeLatency(Function *F) {
+  unsigned TotalSize = 0, TotalLatency = 0;
+  auto &TTI = GetTTI(*F);
+  
+  for (BasicBlock &BB : *F) {
+    for (Instruction &I : BB) {
+      InstructionCost SizeCost = TTI.getInstructionCost(&I, TargetTransformInfo::TCK_CodeSize);
+      InstructionCost LatencyCost = TTI.getInstructionCost(&I, TargetTransformInfo::TCK_Latency);
+
+      // TODO: can we weight latency with freqs
+      TotalSize += SizeCost.isValid() ? SizeCost.getValue() : 1;
+      TotalLatency += LatencyCost.isValid() ? LatencyCost.getValue() : 1;
+    }
+  }
+  
+  return {TotalSize, TotalLatency};
+}
+
+template <> struct llvm::DenseMapInfo<PGOSpecSig> {
+  static inline PGOSpecSig getEmptyKey() { return {~0U, {}}; }
+
+  static inline PGOSpecSig getTombstoneKey() { return {~1U, {}}; }
+
+  static unsigned getHashValue(const PGOSpecSig &S) {
+    return static_cast<unsigned>(hash_value(S));
+  }
+
+  static bool isEqual(const PGOSpecSig &LHS, const PGOSpecSig &RHS) {
+    return LHS == RHS;
+  }
+};
+
+PGOFunctionSpecializer::~PGOFunctionSpecializer() {
+  if (NumSpecsCreated > 0)
+    dbgs() << "PGOFnSpecialization: Created " << NumSpecsCreated
+           << " specializations in module " << M.getName() << "\n";
+}
+
+bool PGOFunctionSpecializer::run() {
+  PGOSpecMap SM;
+  SmallVector<PGOSpec, 32> AllSpecs;
+  unsigned NumCandidates = 0;
+  for (Function &F : M) {
+    if (!isCandidateFunction(&F))
+      continue;
+
+    auto [It, Inserted] = FunctionMetrics.try_emplace(&F);
+    CodeMetrics &Metrics = It->second;
+    if (Inserted) {
+      SmallPtrSet<const Value *, 32> EphValues;
+      CodeMetrics::collectEphemeralValues(&F, &GetAC(F), EphValues);
+      for (BasicBlock &BB : F)
+        Metrics.analyzeBasicBlock(&BB, GetTTI(F), EphValues);
+    }
+
+    const bool RequireMinSize =
+        !ForceSpecialization &&
+        !F.hasFnAttribute(Attribute::NoInline);
+
+    if (Metrics.notDuplicatable || !Metrics.NumInsts.isValid() ||
+        (RequireMinSize && Metrics.NumInsts < MinFunctionSize))
+      continue;
+
+    
+    if (Metrics.isRecursive)
+      continue;
+
+    int64_t Sz = Metrics.NumInsts.getValue();
+    assert(Sz > 0 && "CodeSize should be positive");
+    unsigned FuncSize = static_cast<unsigned>(Sz);
+
+    dbgs() << "PGOFnSpecialization: Specialization cost for "
+                      << F.getName() << " is " << FuncSize << "\n";
+
+    if (!findSpecializations(&F, FuncSize, AllSpecs, SM)) {
+      dbgs() << "PGOFnSpecialization: No possible specializations found for "
+                 << F.getName() << "\n";
+      continue;
+    }
+
+    ++NumCandidates;
+  }
+
+  if (!NumCandidates) {
+    dbgs()
+        << "PGOFnSpecialization: No possible specializations found in module\n";
+    return false;
+  }
+
+  const unsigned NSpecs = unsigned(AllSpecs.size());
+  SmallVector<unsigned> BestSpecs(NSpecs + 1);
+  std::iota(BestSpecs.begin(), BestSpecs.begin() + NSpecs, 0);
+
+  dbgs() << "PGOFnSpecialization: List of specializations \n";
+  for (unsigned I = 0; I < NSpecs; ++I) {
+    const PGOSpec &S = AllSpecs[BestSpecs[I]];
+    dbgs() << "PGOFnSpecialization: Function " << S.F->getName()
+           << " , OriginalLatency " << S.OriginalLatency << " , SpecializedLatency " << S.SpecializedLatency
+           << " , Count " << S.Count << " , SpecializedCodeSize " << S.SpecializedCodeSize << "\n";
+    for (const ArgInfo &Arg : S.Sig.Args)
+      dbgs() << "PGOFnSpecialization:   FormalArg = "
+             << Arg.Formal->getNameOrAsOperand()
+             << ", ActualArg = " << Arg.Actual->getNameOrAsOperand()
+             << "\n";
+  }
+
+  SmallPtrSet<Function *, 8> OriginalFuncs;
+  SmallVector<Function *> Clones;
+  DenseMap<CallBase *, SmallVector<PGOSpec *>> CallSiteSpecs;
+  for (unsigned I = 0; I < NSpecs; ++I) {
+    PGOSpec &S = AllSpecs[BestSpecs[I]];
+
+    Specializations.insert(S.Clone);
+
+    for (CallBase *Call : S.CallSites) {
+      CallSiteSpecs[Call].push_back(&S);
+    }
+
+    Clones.push_back(S.Clone);
+    OriginalFuncs.insert(S.F);
+  }
+
+  for (auto &[CS, Specs] : CallSiteSpecs) {
+    // Derived from PGOMemOPSizeOpt, extended to support FP types and invoke
+    Function *Func = CS->getFunction();
+    auto &Ctx = Func->getContext();
+
+    DominatorTree &DT = GetDT(*Func);
+    BasicBlock *BB = CS->getParent();
+    BasicBlock *DefaultBB = nullptr;
+    BasicBlock *MergeBB = nullptr;
+    BasicBlock *UnwindBB = nullptr;
+
+    if (auto *Invoke = dyn_cast<InvokeInst>(CS)) {
+      DefaultBB = SplitBlock(BB, CS, &DT);
+
+      BasicBlock *OrigNormalDest = Invoke->getNormalDest();
+      UnwindBB = Invoke->getUnwindDest();
+
+      MergeBB = SplitBlock(OrigNormalDest, &OrigNormalDest->front(), &DT);
+
+      Invoke->setNormalDest(MergeBB);
+    } else {
+      DefaultBB = SplitBlock(BB, CS, &DT);
+      BasicBlock::iterator It(*CS);
+      ++It;
+      assert(It != DefaultBB->end());
+      MergeBB = SplitBlock(DefaultBB, &(*It), &DT);
+    }
+
+    MergeBB->setName("CS.Merge");
+    DefaultBB->setName("CS.Default");
+
+    DomTreeUpdater DTU(&DT, DomTreeUpdater::UpdateStrategy::Eager);
+
+    auto ArgNo = Specs[0]->Sig.Args[0].Formal->getArgNo();
+    Value *ArgVar = CS->getArgOperand(ArgNo);
+
+    // Bitcast float/double to integer for switch
+    Type *ArgType = ArgVar->getType();
+
+    auto *Term = BB->getTerminator();
+    IRBuilder<> IRB(Term);
+
+    Type *IntType = nullptr;
+    if (ArgType->isFloatTy() || ArgType->isDoubleTy()) {
+      IntType =
+          ArgType->isFloatTy() ? Type::getInt32Ty(Ctx) : Type::getInt64Ty(Ctx);
+      ArgVar = IRB.CreateBitCast(ArgVar, IntType);
+    }
+
+    SwitchInst *SI = IRB.CreateSwitch(ArgVar, DefaultBB, Specs.size());
+    Term->eraseFromParent();
+
+    Type *CSTy = CS->getType();
+    PHINode *PHI = nullptr;
+    if (!CSTy->isVoidTy()) {
+      // Insert a phi for the return values at the merge block.
+      IRBuilder<> IRBM(MergeBB, MergeBB->getFirstNonPHIIt());
+      PHI = IRBM.CreatePHI(CSTy, Specs.size() + 1, "CS.RVMerge");
+      CS->replaceAllUsesWith(PHI);
+      PHI->addIncoming(CS, DefaultBB);
+    }
+
+    dbgs() << "\n\n== Basic Block After==\n";
+
+    std::vector<DominatorTree::UpdateType> Updates;
+    Updates.reserve(2 * Specs.size());
+
+    unsigned CaseIdx = 0;
+    for (PGOSpec *SpecPtr : Specs) {
+      Constant *SpecArgVal = SpecPtr->Sig.Args[0].Actual;
+      BasicBlock *CaseBB = BasicBlock::Create(
+          Ctx, Twine("CS.Case.") + Twine(CaseIdx++), Func, DefaultBB);
+      CallBase *NewCB = cast<CallBase>(CS->clone());
+
+      NewCB->setCalledFunction(SpecPtr->Clone);
+      NewCB->setArgOperand(ArgNo, SpecArgVal);
+      NewCB->insertInto(CaseBB, CaseBB->end());
+
+      if (auto *Invoke = dyn_cast<InvokeInst>(NewCB)) {
+        Invoke->setNormalDest(MergeBB);
+      } else {
+        IRBuilder<> IRBCase(CaseBB);
+        IRBCase.CreateBr(MergeBB);
+      }
+
+      // Convert constant to ConstantInt for switch case
+      Constant *CaseVal = SpecArgVal;
+      if (IntType) {
+        CaseVal = ConstantInt::get(IntType, cast<ConstantFP>(CaseVal)
+                                                ->getValue()
+                                                .bitcastToAPInt()
+                                                .getZExtValue());
+      }
+      SI->addCase(cast<ConstantInt>(CaseVal), CaseBB);
+      if (!CSTy->isVoidTy())
+        PHI->addIncoming(NewCB, CaseBB);
+
+      Updates.push_back({DominatorTree::Insert, CaseBB, MergeBB});
+      Updates.push_back({DominatorTree::Insert, BB, CaseBB});
+
+      dbgs() << *CaseBB << "\n";
+    }
+
+    DTU.applyUpdates(Updates);
+  }
+
+  return false;
+}
+
+static Constant *synthesizeConstant(Type *T, uint64_t V) {
+  dbgs() << *T << '\n';
+  if (T->isIntegerTy()) {
+    return llvm::ConstantInt::get(T, V);
+  } else if (T->isFloatTy()) {
+    float F = llvm::bit_cast<float>(static_cast<uint32_t>(V));
+    return llvm::ConstantFP::get(T->getContext(), llvm::APFloat(F));
+  } else if (T->isDoubleTy()) {
+    double D = llvm::bit_cast<double>(V);
+    return llvm::ConstantFP::get(T->getContext(), llvm::APFloat(D));
+  } else {
+    return nullptr;
+  }
+}
+
+bool PGOFunctionSpecializer::findSpecializations(Function *F, unsigned FuncSize,
+                                                 SmallVectorImpl<PGOSpec> &AllSpecs,
+                                                 PGOSpecMap &SM) {
+  DenseMap<PGOSpecSig, unsigned> UniqueSpecs;
+
+  auto [OriginalCodeSize, OriginalLatency] = calculateFunctionSizeLatency(F);
+  SmallVector<std::pair<Argument *, uint32_t>> Args;
+  uint32_t VPArgIdx = 0;
+  for (Argument &Arg : F->args()) {
+    // Must be kept in sync with the argument value profiling plugin.
+    Type *T = Arg.getType();
+
+    if (T->isIntegerTy() || T->isFloatTy() || T->isDoubleTy())
+      Args.push_back({&Arg, VPArgIdx++});
+  }
+
+  if (Args.empty()) {
+    dbgs() << "No args\n";
+    return false;
+  }
+
+  for (User *U : F->users()) {
+    if (!isa<CallInst>(U) && !isa<InvokeInst>(U)) {
+      dbgs() << "Not call!\n";
+      continue;
+    }
+
+
+    auto &CS = *cast<CallBase>(U);
+
+    if (CS.getCalledFunction() != F)
+      continue;
+
+    if (CS.hasFnAttr(Attribute::MinSize))
+      continue;
+
+    for (auto [A, VPIdx] : Args) {
+      uint64_t TotalCount;
+      auto ValueProfData = getValueProfDataFromInst(CS, IPVK_ArgumentValue, 5,
+                                                 TotalCount, false, VPIdx);
+      auto &BFI = GetBFI(*F);
+      auto BBEdgeCount = BFI.getBlockProfileCount(CS.getParent());
+      if (BBEdgeCount) {
+        // Use block profile count as the total if available, it is more
+        // accurate as value profile counts will miss rare value counts.
+        TotalCount = std::max(TotalCount, *BBEdgeCount);
+      }
+      if (TotalCount < HotFuncThresh)
+        continue;
+
+      for (const auto &ProfiledValue : ValueProfData) {
+        // Drop values that have a percentage of calls below the configured
+        // cutoff.
+        uint64_t ValProp = (ProfiledValue.Count * 100) / TotalCount;
+        dbgs() << "PGOFnSpecialization: Value " << ProfiledValue.Value
+               << " , ValProp " << ValProp << '\n';
+
+        if (ValProp < AnalysisCutoffThresh)
+          continue;
+
+
+        Constant *C = synthesizeConstant(A->getType(), ProfiledValue.Value);
+        if (!C) {
+          continue;
+        }
+
+        PGOSpecSig S;
+        S.Args.push_back({A, C});
+
+        auto checkWeightedSpecializedLatency = [&](unsigned SpecializedLatency) {
+          if (OriginalLatency == 0)
+            return false;
+
+          unsigned RelativeNewLatency =
+                   (100 * SpecializedLatency) / OriginalLatency;
+          unsigned WeightedLatency =
+              (RelativeNewLatency * ValProp) / 100 + (100 - ValProp);
+          dbgs() << "WeightedLatency " << WeightedLatency << '\n';
+
+          return WeightedLatency < CandidateCutoffThresh;
+        };
+
+        if (auto It = UniqueSpecs.find(S); It != UniqueSpecs.end()) {
+          const unsigned Index = It->second;
+          if (!checkWeightedSpecializedLatency(AllSpecs[Index].SpecializedLatency))
+            continue;
+
+          AllSpecs[Index].CallSites.push_back(&CS);
+          AllSpecs[Index].Count += ProfiledValue.Count;
+        } else {
+          Function *ClonedF = cloneFunctionSpecialized(F, A, C);
+
+          auto [SpecializedCodeSize, SpecializedLatency] = calculateFunctionSizeLatency(ClonedF);
+
+          dbgs() << "PGOFnSpecialization: Original CodeSize="
+                 << OriginalCodeSize << " Latency=" << OriginalLatency
+                 << " Specialized CodeSize=" << SpecializedCodeSize
+                 << " Latency=" << SpecializedLatency << "\n";
+
+          if (!checkWeightedSpecializedLatency(SpecializedLatency))
+            continue;
+
+          auto &PGOSpec = AllSpecs.emplace_back(F, ClonedF, S, OriginalCodeSize, OriginalLatency,
+                                                SpecializedCodeSize, SpecializedLatency,
+                                                ProfiledValue.Count);
+          PGOSpec.CallSites.push_back(&CS);
+          const unsigned Index = AllSpecs.size() - 1;
+          UniqueSpecs[S] = Index;
+          if (auto [It, Inserted] = SM.try_emplace(F, Index, Index + 1);
+              !Inserted)
+            It->second.second = Index + 1;
+        }
+      }
+
+      break; // Multiple args are hard!! need to find arg that specializes best and drop all others, do later
+    }
+  }
+
+  return !UniqueSpecs.empty();
+}
+
+bool PGOFunctionSpecializer::isCandidateFunction(Function *F) {
+  if (F->isDeclaration() || F->arg_empty())
+    return false;
+
+  if (F->hasFnAttribute(Attribute::NoDuplicate))
+    return false;
+
+  if (shouldOptimizeForSize(F, nullptr, nullptr, PGSOQueryType::IRPass))
+    return false;
+
+  if (F->hasFnAttribute(Attribute::AlwaysInline))
+    return false;
+
+  dbgs() << "PGOFnSpecialization: Try function: " << F->getName() << "\n";
+  return true;
+}
+
+PreservedAnalyses
+PGOFunctionSpecializationPass::run(Module &M, ModuleAnalysisManager &AM) {
+  auto &FAM = AM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
+
+  auto GetTLI = [&FAM](Function &F) -> const TargetLibraryInfo & {
+    return FAM.getResult<TargetLibraryAnalysis>(F);
+  };
+  auto GetTTI = [&FAM](Function &F) -> TargetTransformInfo & {
+    return FAM.getResult<TargetIRAnalysis>(F);
+  };
+  auto GetAC = [&FAM](Function &F) -> AssumptionCache & {
+    return FAM.getResult<AssumptionAnalysis>(F);
+  };
+  auto GetDT = [&FAM](Function &F) -> DominatorTree & {
+    return FAM.getResult<DominatorTreeAnalysis>(F);
+  };
+  auto GetBFI = [&FAM](Function &F) -> BlockFrequencyInfo & {
+    return FAM.getResult<BlockFrequencyAnalysis>(F);
+  };
+
+  PGOFunctionSpecializer Specializer(M, &FAM, GetBFI, GetTLI, GetTTI, GetAC, GetDT);
+
+  bool Changed = Specializer.run();
+
+  if (!Changed)
+    return PreservedAnalyses::all();
+
+  PreservedAnalyses PA;
+  PA.preserve<FunctionAnalysisManagerModuleProxy>();
+  return PA;
+}
