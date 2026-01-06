@@ -43,6 +43,7 @@ struct PGOSpec {
   Function *F;
   Function *Clone = nullptr;
   PGOSpecSig Sig;
+  Function *ExistingFunc = nullptr; // Pre-existing specialization to reuse
   unsigned OriginalCodeSize;
   unsigned OriginalLatency;
   unsigned SpecializedCodeSize;
@@ -92,7 +93,8 @@ public:
   LLVM_ABI bool run();
 
 private:
-  Function *cloneFunctionSpecialized(Function *F, Argument *Arg, Constant *C);
+  std::pair<Function *, Function *>
+  cloneFunctionSpecialized(Function *F, Argument *Arg, Constant *C, uint64_t V);
 
   std::pair<unsigned, unsigned> calculateFunctionSizeLatency(Function *F);
 

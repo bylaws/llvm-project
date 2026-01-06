@@ -74,13 +74,25 @@ static cl::opt<unsigned> HotFuncThresh(
     "pgofuncspec-hot-func-thresh", cl::init(5000), cl::Hidden,
     cl::desc("TODO"));
 
-Function *PGOFunctionSpecializer::cloneFunctionSpecialized(Function *F, 
-                                                            Argument *Arg,
-                                                            Constant *C) {
+std::pair<Function *, Function *>
+PGOFunctionSpecializer::cloneFunctionSpecialized(Function *F, Argument *Arg,
+                                                 Constant *C, uint64_t V) {
+  std::string NewName = F->getName().str() + ".spec." +
+                        std::to_string(Arg->getArgNo()) + "." +
+                        std::to_string(V); // Generate a unique name for dedeup
+
+  // Check if a function with this specialized name already exists in the module
+  Function *ExistingFunc = M.getFunction(NewName);
+  if (ExistingFunc) {
+    dbgs() << "PGOFnSpecialization: Found existing specialization " << NewName
+           << "\n";
+  }
+
   ValueToValueMapTy VMap;
-  
-  // TODO: need _ZL15do_swizzle_copyILm0EEvPcS0_m to opt properly
+
   Function *ClonedF = CloneFunction(F, VMap);
+
+  ClonedF->setName(NewName + ".analysis");
   ClonedF->setLinkage(GlobalValue::InternalLinkage);
   Argument *ClonedArg = ClonedF->getArg(Arg->getArgNo());
   ClonedArg->replaceAllUsesWith(C);
@@ -124,7 +136,18 @@ Function *PGOFunctionSpecializer::cloneFunctionSpecialized(Function *F,
 
   FPM.run(*ClonedF, *FAM);
 
-  return ClonedF;
+  // If no existing function was found, finalize the clone as the actual
+  // specialization
+  if (!ExistingFunc) {
+    ClonedF->setName(NewName);
+    ClonedF->setLinkage(GlobalValue::LinkOnceODRLinkage);
+    ClonedF->setVisibility(GlobalValue::HiddenVisibility);
+    Comdat *CD = M.getOrInsertComdat(NewName);
+    CD->setSelectionKind(Comdat::Any);
+    ClonedF->setComdat(CD);
+  }
+
+  return {ClonedF, ExistingFunc};
 }
 
 std::pair<unsigned, unsigned> PGOFunctionSpecializer::calculateFunctionSizeLatency(Function *F) {
@@ -323,7 +346,11 @@ bool PGOFunctionSpecializer::run() {
           Ctx, Twine("CS.Case.") + Twine(CaseIdx++), Func, DefaultBB);
       CallBase *NewCB = cast<CallBase>(CS->clone());
 
-      NewCB->setCalledFunction(SpecPtr->Clone);
+      // Use existing function if available, otherwise use the newly created
+      // clone
+      Function *FuncToCall =
+          SpecPtr->ExistingFunc ? SpecPtr->ExistingFunc : SpecPtr->Clone;
+      NewCB->setCalledFunction(FuncToCall);
       NewCB->setArgOperand(ArgNo, SpecArgVal);
       NewCB->insertInto(CaseBB, CaseBB->end());
 
@@ -463,7 +490,8 @@ bool PGOFunctionSpecializer::findSpecializations(Function *F, unsigned FuncSize,
           AllSpecs[Index].CallSites.push_back(&CS);
           AllSpecs[Index].Count += ProfiledValue.Count;
         } else {
-          Function *ClonedF = cloneFunctionSpecialized(F, A, C);
+          auto [ClonedF, ExistingFunc] =
+              cloneFunctionSpecialized(F, A, C, ProfiledValue.Value);
 
           auto [SpecializedCodeSize, SpecializedLatency] = calculateFunctionSizeLatency(ClonedF);
 
@@ -479,6 +507,7 @@ bool PGOFunctionSpecializer::findSpecializations(Function *F, unsigned FuncSize,
                                                 SpecializedCodeSize, SpecializedLatency,
                                                 ProfiledValue.Count);
           PGOSpec.CallSites.push_back(&CS);
+          PGOSpec.ExistingFunc = ExistingFunc;
           const unsigned Index = AllSpecs.size() - 1;
           UniqueSpecs[S] = Index;
           if (auto [It, Inserted] = SM.try_emplace(F, Index, Index + 1);
