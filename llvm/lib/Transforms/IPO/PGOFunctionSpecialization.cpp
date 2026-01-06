@@ -206,14 +206,12 @@ bool PGOFunctionSpecializer::run() {
     }
 
     const bool RequireMinSize =
-        !ForceSpecialization &&
-        !F.hasFnAttribute(Attribute::NoInline);
+        !ForceSpecialization && !F.hasFnAttribute(Attribute::NoInline);
 
     if (Metrics.notDuplicatable || !Metrics.NumInsts.isValid() ||
         (RequireMinSize && Metrics.NumInsts < MinFunctionSize))
       continue;
 
-    
     if (Metrics.isRecursive)
       continue;
 
@@ -375,6 +373,20 @@ bool PGOFunctionSpecializer::run() {
     DTU.applyUpdates(Updates);
   }
 
+  // Clean up analysis clones that were only used for cost analysis
+  for (auto &[CS, Specs] : CallSiteSpecs) {
+    for (PGOSpec *SpecPtr : Specs) {
+      // If we reused an existing function, delete the analysis clone
+      if (SpecPtr->ExistingFunc && SpecPtr->Clone) {
+        dbgs() << "PGOFnSpecialization: Deleting analysis clone "
+               << SpecPtr->Clone->getName() << "\n";
+        FAM->clear(*SpecPtr->Clone, SpecPtr->Clone->getName());
+        SpecPtr->Clone->eraseFromParent();
+        SpecPtr->Clone = nullptr;
+      }
+    }
+  }
+
   return !CallSiteSpecs.empty();
 }
 
@@ -489,7 +501,9 @@ bool PGOFunctionSpecializer::findSpecializations(Function *F, unsigned FuncSize,
                  << " Specialized CodeSize=" << SpecializedCodeSize
                  << " Latency=" << SpecializedLatency << "\n";
 
-          if (!checkWeightedSpecializedLatency(SpecializedLatency))
+          if (!checkWeightedSpecializedLatency(SpecializedLatency)) {
+            FAM->clear(*ClonedF, ClonedF->getName());
+            ClonedF->eraseFromParent();
             continue;
           }
 
@@ -521,11 +535,23 @@ bool PGOFunctionSpecializer::findSpecializations(Function *F, unsigned FuncSize,
 
     if (Score > BestArgSpecsScore) {
       for (auto &[Const, Spec] : BestArgSpecs) {
+        if (Spec.Clone) {
+          FAM->clear(*Spec.Clone, Spec.Clone->getName());
+          Spec.Clone->eraseFromParent();
         }
+        // Note: ExistingFunc is not owned by us, so we don't delete it
       }
 
       BestArgSpecs = std::move(ArgSpecsMap);
       BestArgSpecsScore = Score;
+    } else {
+      for (auto &[Const, Spec] : ArgSpecsMap) {
+        if (Spec.Clone) {
+          FAM->clear(*Spec.Clone, Spec.Clone->getName());
+          Spec.Clone->eraseFromParent();
+        }
+        // Note: ExistingFunc is not owned by us, so we don't delete it
+      }
     }
   }
 
@@ -577,7 +603,8 @@ PGOFunctionSpecializationPass::run(Module &M, ModuleAnalysisManager &AM) {
     return FAM.getResult<BlockFrequencyAnalysis>(F);
   };
 
-  PGOFunctionSpecializer Specializer(M, &FAM, GetBFI, GetTLI, GetTTI, GetAC, GetDT);
+  PGOFunctionSpecializer Specializer(M, &FAM, GetBFI, GetTLI, GetTTI, GetAC,
+                                     GetDT, OptLevel);
 
   bool Changed = Specializer.run();
 
