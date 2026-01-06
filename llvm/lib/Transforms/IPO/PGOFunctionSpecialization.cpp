@@ -139,6 +139,7 @@ PGOFunctionSpecializer::cloneFunctionSpecialized(Function *F, Argument *Arg,
   // If no existing function was found, finalize the clone as the actual
   // specialization
   if (!ExistingFunc) {
+    ClonedF->addFnAttr("pgo.specialization");
     ClonedF->setName(NewName);
     ClonedF->setLinkage(GlobalValue::LinkOnceODRLinkage);
     ClonedF->setVisibility(GlobalValue::HiddenVisibility);
@@ -534,6 +535,9 @@ bool PGOFunctionSpecializer::isCandidateFunction(Function *F) {
     return false;
 
   if (F->hasFnAttribute(Attribute::AlwaysInline))
+    return false;
+
+  if (F->hasFnAttribute("pgo.specialization"))
     return false;
 
   dbgs() << "PGOFnSpecialization: Try function: " << F->getName() << "\n";
