@@ -63,18 +63,30 @@ static cl::opt<unsigned> MinFunctionSize(
     cl::desc("Don't specialize functions that have less than this number of "
              "instructions"));
 
-static cl::opt<unsigned> AnalysisCutoffThresh(
-    "pgofuncspec-analysis-cutoff-thresh", cl::init(10), cl::Hidden,
-    cl::desc("TODO"));
+static cl::opt<unsigned>
+    AnalysisCutoffThresh("pgofuncspec-analysis-cutoff-thresh", cl::init(15),
+                         cl::Hidden, cl::desc("TODO"));
 
-static cl::opt<unsigned> CandidateCutoffThresh(
-    "pgofuncspec-candidate-cutoff-thresh", cl::init(90), cl::Hidden,
-    cl::desc("TODO"));
+static cl::opt<unsigned>
+    CandidateCutoffThresh("pgofuncspec-candidate-cutoff-thresh", cl::init(95),
+                          cl::Hidden, cl::desc("TODO"));
 
-static cl::opt<unsigned> HotFuncThresh(
-    "pgofuncspec-hot-func-thresh", cl::init(5000), cl::Hidden,
-    cl::desc("TODO"));
+static cl::opt<unsigned> DispatchCost("pgofuncspec-dispatch-cost", cl::init(10),
+                                      cl::Hidden, cl::desc("TODO"));
 
+static cl::opt<unsigned> HotFuncThresh("pgofuncspec-hot-func-thresh",
+                                       cl::init(3500), cl::Hidden,
+                                       cl::desc("TODO"));
+static cl::opt<unsigned> BlowupFactor("pgofuncspec-blowup-factor", cl::init(2),
+                                      cl::Hidden, cl::desc("TODO"));
+
+static cl::opt<unsigned> MaxSpecSize("pgofuncspec-max-spec-size",
+                                     cl::init(1000), cl::Hidden,
+                                     cl::desc("TODO"));
+
+static cl::opt<unsigned> MinLatencyThresh("pgofuncspec-min-latency-thresh",
+                                          cl::init(5), cl::Hidden,
+                                          cl::desc("TODO"));
 std::pair<Function *, Function *>
 PGOFunctionSpecializer::cloneFunctionSpecialized(Function *F, Argument *Arg,
                                                  Constant *C, uint64_t V) {
@@ -518,6 +530,7 @@ bool PGOFunctionSpecializer::findSpecializations(
   uint64_t BestArgSpecsScore = 0;
   DenseMap<Constant *, PGOSpec> BestArgSpecs;
   tagBlocks(F, BlockTag);
+  auto PredictableThreshBranchProb = GetTTI(*F).getPredictableBranchThreshold();
 
   for (auto [A, VPIdx] : Args) {
     DenseMap<Constant *, PGOSpec> ArgSpecsMap;
@@ -562,21 +575,37 @@ bool PGOFunctionSpecializer::findSpecializations(
           continue;
         }
 
-        auto checkWeightedSpecializedLatency = [&](unsigned SpecializedLatency) {
-          if (OriginalLatency == 0)
-            return false;
+        BranchProbability ValBranchProb(ValProp, 100);
 
-          unsigned RelativeNewLatency =
-                   (100 * SpecializedLatency) / OriginalLatency;
-          unsigned WeightedLatency =
-              (RelativeNewLatency * ValProp) / 100 + (100 - ValProp);
-          dbgs() << "WeightedLatency " << WeightedLatency << '\n';
+        auto checkWeightedSpecializedLatency =
+            [&](unsigned OriginalLatency, unsigned SpecializedLatency) {
+              if (OriginalLatency == 0)
+                return false;
 
-          return WeightedLatency < CandidateCutoffThresh;
-        };
+              // Account for dispatch cost at call site: all calls pay dispatch
+              // overhead Calculate in absolute latency units to avoid rounding
+              // to zero for large functions WeightedLatency =
+              // (SpecializedLatency * ValProp + OriginalLatency * (100-ValProp)
+              // + DispatchCost * 100) / OriginalLatency
+              uint64_t WeightedLatencyAbs =
+                  static_cast<uint64_t>(SpecializedLatency) * ValProp +
+                  static_cast<uint64_t>(OriginalLatency) * (100 - ValProp);
+
+              if (ValBranchProb < PredictableThreshBranchProb)
+                WeightedLatencyAbs += static_cast<uint64_t>(DispatchCost) * 100;
+              else
+                WeightedLatencyAbs += 100;
+
+              unsigned WeightedLatency = WeightedLatencyAbs / OriginalLatency;
+              dbgs() << "PGOFnSpecialization: WeightedLatency="
+                     << WeightedLatency << '\n';
+
+              return WeightedLatency < CandidateCutoffThresh;
+            };
 
         if (auto It = ArgSpecsMap.find(C); It != ArgSpecsMap.end()) {
-          if (!checkWeightedSpecializedLatency(It->second.SpecializedLatency))
+          if (!checkWeightedSpecializedLatency(It->second.OriginalLatency,
+                                               It->second.SpecializedLatency))
             continue;
 
           It->second.CallSites.push_back(&CS);
@@ -595,7 +624,12 @@ bool PGOFunctionSpecializer::findSpecializations(
                  << " Specialized CodeSize=" << SpecializedCodeSize
                  << " Latency=" << SpecializedLatency << "\n";
 
-          if (!checkWeightedSpecializedLatency(SpecializedLatency)) {
+          if (!checkWeightedSpecializedLatency(OriginalLatency,
+                                               SpecializedLatency) ||
+              ((OriginalLatency - SpecializedLatency) * BlowupFactor <
+               SpecializedCodeSize) ||
+              SpecializedCodeSize >= MaxSpecSize ||
+              OriginalLatency < MinLatencyThresh) {
             FAM->clear(*ClonedF, ClonedF->getName());
             ClonedF->eraseFromParent();
             continue;
