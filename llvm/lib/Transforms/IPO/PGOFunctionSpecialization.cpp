@@ -44,6 +44,7 @@
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/SizeOpts.h"
 #include <cmath>
+#include <map>
 
 using namespace llvm;
 
@@ -151,37 +152,69 @@ PGOFunctionSpecializer::cloneFunctionSpecialized(Function *F, Argument *Arg,
   return {ClonedF, ExistingFunc};
 }
 
-std::pair<unsigned, unsigned> PGOFunctionSpecializer::calculateFunctionSizeLatency(Function *F) {
-  unsigned TotalSize = 0, TotalLatency = 0;
+std::pair<unsigned, unsigned>
+PGOFunctionSpecializer::calculateFunctionSizeLatency(
+    std::map<unsigned, uint64_t> Tags, Function *F, FunctionCallee &BlockTag) {
+
+  unsigned TotalSize = 0;
+  uint64_t TotalLatency = 0;
   auto &TTI = GetTTI(*F);
-  
+  BlockFrequencyInfo *BFI = nullptr;
+  uint64_t EntryFreq = 1;
+
+  if (Tags.empty()) {
+    BFI = &GetBFI(*F);
+    EntryFreq = BFI->getEntryFreq().getFrequency();
+    if (EntryFreq == 0)
+      EntryFreq = 1;
+  }
+
+  unsigned ID = 0;
+
   for (BasicBlock &BB : *F) {
-    for (Instruction &I : BB) {
-      InstructionCost SizeCost = TTI.getInstructionCost(&I, TargetTransformInfo::TCK_CodeSize);
-      InstructionCost LatencyCost = TTI.getInstructionCost(&I, TargetTransformInfo::TCK_Latency);
+    uint64_t Weight = 0;
 
-      // TODO: can we weight latency with freqs
-      TotalSize += SizeCost.isValid() ? SizeCost.getValue() : 1;
-      TotalLatency += LatencyCost.isValid() ? LatencyCost.getValue() : 1;
+    if (!Tags.empty()) {
+      if (auto It = Tags.find(ID); It != Tags.end()) {
+        Weight = It->second;
+      } else {
+        Weight = 0;
+      }
+    } else {
+      uint64_t BBFreq = BFI->getBlockFreq(&BB).getFrequency();
+      Weight = (BBFreq * 100) / EntryFreq;
+      if (Weight == 0 && BBFreq > 0)
+        Weight = 1;
     }
+
+    if (Weight) {
+      for (Instruction &I : BB) {
+        if (auto *C = dyn_cast<CallInst>(&I);
+            C && C->getCalledFunction() == BlockTag.getCallee()) {
+          continue;
+        }
+
+        InstructionCost SizeCost =
+            TTI.getInstructionCost(&I, TargetTransformInfo::TCK_CodeSize);
+        InstructionCost LatencyCost =
+            TTI.getInstructionCost(&I, TargetTransformInfo::TCK_Latency);
+
+        TotalSize += SizeCost.isValid() ? SizeCost.getValue() : 1;
+
+        uint64_t InstLatency =
+            LatencyCost.isValid() ? LatencyCost.getValue() : 1;
+        TotalLatency += InstLatency * Weight;
+      }
+    }
+    ID++;
   }
-  
-  return {TotalSize, TotalLatency};
+
+  TotalLatency /= 100;
+  if (TotalLatency > UINT_MAX)
+    TotalLatency = UINT_MAX;
+
+  return {TotalSize, static_cast<unsigned>(TotalLatency)};
 }
-
-template <> struct llvm::DenseMapInfo<PGOSpecSig> {
-  static inline PGOSpecSig getEmptyKey() { return {~0U, {}}; }
-
-  static inline PGOSpecSig getTombstoneKey() { return {~1U, {}}; }
-
-  static unsigned getHashValue(const PGOSpecSig &S) {
-    return static_cast<unsigned>(hash_value(S));
-  }
-
-  static bool isEqual(const PGOSpecSig &LHS, const PGOSpecSig &RHS) {
-    return LHS == RHS;
-  }
-};
 
 PGOFunctionSpecializer::~PGOFunctionSpecializer() {
   if (NumSpecsCreated > 0)
@@ -192,6 +225,15 @@ PGOFunctionSpecializer::~PGOFunctionSpecializer() {
 bool PGOFunctionSpecializer::run() {
   SmallVector<PGOSpec, 32> AllSpecs;
   unsigned NumCandidates = 0;
+
+  AttributeList Attrs = AttributeList::get(
+      M.getContext(), AttributeList::FunctionIndex, {Attribute::NoUnwind});
+
+  FunctionCallee BlockTag = M.getOrInsertFunction(
+      "__pgo_block_marker", Attrs, Type::getVoidTy(M.getContext()),
+      Type::getInt32Ty(M.getContext()));
+  dyn_cast<Function>(BlockTag.getCallee())->setOnlyAccessesInaccessibleMemory();
+
   for (Function &F : M) {
     if (!isCandidateFunction(&F))
       continue;
@@ -222,7 +264,7 @@ bool PGOFunctionSpecializer::run() {
     dbgs() << "PGOFnSpecialization: Specialization cost for " << F.getName()
            << " is " << FuncSize << "\n";
 
-    if (!findSpecializations(&F, FuncSize, AllSpecs)) {
+    if (!findSpecializations(&F, FuncSize, AllSpecs, BlockTag)) {
       dbgs() << "PGOFnSpecialization: No possible specializations found for "
              << F.getName() << "\n";
       continue;
@@ -405,12 +447,60 @@ static Constant *synthesizeConstant(Type *T, uint64_t V) {
   }
 }
 
-bool PGOFunctionSpecializer::findSpecializations(Function *F, unsigned FuncSize,
-                                                 SmallVectorImpl<PGOSpec> &AllSpecs,
-                                                 PGOSpecMap &SM) {
-  DenseMap<PGOSpecSig, unsigned> UniqueSpecs;
+static void tagBlocks(Function *F, FunctionCallee &BlockTag) {
+  auto &Ctx = F->getContext();
+  unsigned ID = 0;
+  for (auto &BB : *F) {
+    IRBuilder<> B(&*BB.getFirstInsertionPt());
+    CallInst *CI =
+        B.CreateCall(BlockTag, {ConstantInt::get(Type::getInt32Ty(Ctx), ID++)});
+  }
+}
 
-  auto [OriginalCodeSize, OriginalLatency] = calculateFunctionSizeLatency(F);
+static std::map<unsigned, uint64_t>
+getTaggedBlocks(std::function<BlockFrequencyInfo &(Function &)> &GetBFI,
+                Function *F, FunctionCallee &BlockTag) {
+  auto &BFI = GetBFI(*F);
+
+  uint64_t EntryFreq = BFI.getEntryFreq().getFrequency();
+  if (EntryFreq == 0)
+    EntryFreq = 1;
+  std::map<unsigned, uint64_t> Res;
+  for (auto &BB : *F) {
+    uint64_t BBFreq = BFI.getBlockFreq(&BB).getFrequency();
+    uint64_t Weight = (BBFreq * 100) / EntryFreq;
+    if (Weight == 0 && BBFreq > 0)
+      Weight = 1;
+    for (auto &I : BB) {
+      if (auto *C = dyn_cast<CallInst>(&I);
+          C && C->getCalledFunction() == BlockTag.getCallee()) {
+        unsigned ID = cast<ConstantInt>(C->getArgOperand(0))->getZExtValue();
+        Res[ID] += Weight;
+      }
+    }
+  }
+
+  return Res;
+}
+
+static void untagBlocks(FunctionCallee &BlockTag) {
+  // Avoid invalidation during iteration by taking a copy of users
+  std::vector<User *> Users;
+  for (User *U : BlockTag.getCallee()->users()) {
+    Users.push_back(U);
+  }
+
+  for (User *U : Users) {
+    if (Instruction *I = dyn_cast<Instruction>(U))
+      I->eraseFromParent();
+  }
+}
+
+bool PGOFunctionSpecializer::findSpecializations(
+    Function *F, unsigned FuncSize, SmallVectorImpl<PGOSpec> &AllSpecs,
+    FunctionCallee &BlockTag) {
+  auto [OriginalCodeSize, _] = calculateFunctionSizeLatency({}, F, BlockTag);
+
   SmallVector<std::pair<Argument *, uint32_t>> Args;
   uint32_t VPArgIdx = 0;
   for (Argument &Arg : F->args()) {
@@ -427,6 +517,7 @@ bool PGOFunctionSpecializer::findSpecializations(Function *F, unsigned FuncSize,
 
   uint64_t BestArgSpecsScore = 0;
   DenseMap<Constant *, PGOSpec> BestArgSpecs;
+  tagBlocks(F, BlockTag);
 
   for (auto [A, VPIdx] : Args) {
     DenseMap<Constant *, PGOSpec> ArgSpecsMap;
@@ -494,7 +585,10 @@ bool PGOFunctionSpecializer::findSpecializations(Function *F, unsigned FuncSize,
           auto [ClonedF, ExistingFunc] =
               cloneFunctionSpecialized(F, A, C, ProfiledValue.Value);
 
-          auto [SpecializedCodeSize, SpecializedLatency] = calculateFunctionSizeLatency(ClonedF);
+          auto [SpecializedCodeSize, SpecializedLatency] =
+              calculateFunctionSizeLatency({}, ClonedF, BlockTag);
+          auto [_, OriginalLatency] = calculateFunctionSizeLatency(
+              getTaggedBlocks(GetBFI, ClonedF, BlockTag), F, BlockTag);
 
           dbgs() << "PGOFnSpecialization: Original CodeSize="
                  << OriginalCodeSize << " Latency=" << OriginalLatency
@@ -554,6 +648,8 @@ bool PGOFunctionSpecializer::findSpecializations(Function *F, unsigned FuncSize,
       }
     }
   }
+
+  untagBlocks(BlockTag);
 
   AllSpecs.reserve(AllSpecs.size() + BestArgSpecs.size());
   std::transform(BestArgSpecs.begin(), BestArgSpecs.end(),

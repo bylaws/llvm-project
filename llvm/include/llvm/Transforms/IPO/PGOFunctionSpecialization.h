@@ -20,6 +20,7 @@
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/SCCPSolver.h"
 #include "llvm/Transforms/Utils/SizeOpts.h"
+#include <map>
 
 namespace llvm {
 struct PGOSpec {
@@ -31,18 +32,18 @@ struct PGOSpec {
   unsigned OriginalLatency;
   unsigned SpecializedCodeSize;
   unsigned SpecializedLatency;
-  unsigned Count;
+  uint64_t Count;
   SmallVector<CallBase *> CallSites;
 
   PGOSpec(Function *F, Function *Clone, const ArgInfo &A, unsigned OrigCodeSize,
           unsigned OrigLatency, unsigned SpecCodeSize, unsigned SpecLatency,
-          unsigned Cnt)
+          uint64_t Cnt)
       : F(F), Clone(Clone), Arg(A), OriginalCodeSize(OrigCodeSize),
         OriginalLatency(OrigLatency), SpecializedCodeSize(SpecCodeSize),
         SpecializedLatency(SpecLatency), Count(Cnt) {}
   PGOSpec(Function *F, Function *Clone, const ArgInfo &&A,
           unsigned OrigCodeSize, unsigned OrigLatency, unsigned SpecCodeSize,
-          unsigned SpecLatency, unsigned Cnt)
+          unsigned SpecLatency, uint64_t Cnt)
       : F(F), Clone(Clone), Arg(A), OriginalCodeSize(OrigCodeSize),
         OriginalLatency(OrigLatency), SpecializedCodeSize(SpecCodeSize),
         SpecializedLatency(SpecLatency), Count(Cnt) {}
@@ -79,10 +80,13 @@ private:
   std::pair<Function *, Function *>
   cloneFunctionSpecialized(Function *F, Argument *Arg, Constant *C, uint64_t V);
 
-  std::pair<unsigned, unsigned> calculateFunctionSizeLatency(Function *F);
+  std::pair<unsigned, unsigned>
+  calculateFunctionSizeLatency(std::map<unsigned, uint64_t> Tags, Function *F,
+                               FunctionCallee &BlockTag);
 
   bool findSpecializations(Function *F, unsigned FuncSize,
-                           SmallVectorImpl<PGOSpec> &AllSpecs);
+                           SmallVectorImpl<PGOSpec> &AllSpecs,
+                           FunctionCallee &BlockTag);
 
   bool isCandidateFunction(Function *F);
 };
