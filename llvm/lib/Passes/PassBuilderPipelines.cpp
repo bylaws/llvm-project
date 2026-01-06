@@ -1273,7 +1273,7 @@ PassBuilder::buildModuleSimplificationPipeline(OptimizationLevel Level,
     MPM.addPass(PGOForceFunctionAttrsPass(PGOOpt->ColdOptType));
 
   if (IsPGOInstrUse) {
-    MPM.addPass(PGOFunctionSpecializationPass());
+    MPM.addPass(PGOFunctionSpecializationPass(Level.getSpeedupLevel()));
   }
 
 

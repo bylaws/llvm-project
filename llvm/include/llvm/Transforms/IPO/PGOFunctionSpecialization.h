@@ -69,6 +69,7 @@ class PGOFunctionSpecializer {
   std::function<TargetTransformInfo &(Function &)> GetTTI;
   std::function<AssumptionCache &(Function &)> GetAC;
   std::function<DominatorTree &(Function &)> GetDT;
+  int OptLevel;
 
   SmallPtrSet<Function *, 32> Specializations;
   SmallPtrSet<Function *, 32> FullySpecialized;
@@ -82,9 +83,9 @@ public:
       std::function<const TargetLibraryInfo &(Function &)> GetTLI,
       std::function<TargetTransformInfo &(Function &)> GetTTI,
       std::function<AssumptionCache &(Function &)> GetAC,
-      std::function<DominatorTree &(Function &)> GetDT)
-      : M(M), FAM(FAM), GetBFI(GetBFI), GetTLI(GetTLI),
-        GetTTI(GetTTI), GetAC(GetAC), GetDT(GetDT) {}
+      std::function<DominatorTree &(Function &)> GetDT, int OptLevel)
+      : M(M), FAM(FAM), GetBFI(GetBFI), GetTLI(GetTLI), GetTTI(GetTTI),
+        GetAC(GetAC), GetDT(GetDT), OptLevel(OptLevel) {}
 
   LLVM_ABI ~PGOFunctionSpecializer();
 
@@ -101,8 +102,12 @@ private:
   bool isCandidateFunction(Function *F);
 };
 
-class PGOFunctionSpecializationPass : public PassInfoMixin<PGOFunctionSpecializationPass> {
+class PGOFunctionSpecializationPass
+    : public PassInfoMixin<PGOFunctionSpecializationPass> {
+  int OptLevel;
+
 public:
+  PGOFunctionSpecializationPass(int OptLevel = 2) : OptLevel(OptLevel) {}
   PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM);
 };
 
