@@ -191,6 +191,11 @@ static cl::opt<unsigned> MaxNumMemOPAnnotations(
     cl::desc("Max number of precise value annotations for a single memop"
              "intrinsic"));
 
+static cl::opt<unsigned> MaxNumArgumentValueAnnotations(
+    "argument-value-max-annotations", cl::init(5), cl::Hidden,
+    cl::desc("Max number of precise value annotations for a single function"
+             "argument value"));
+
 // Command line option to control appending FunctionHash to the name of a COMDAT
 // function. This is to avoid the hash mismatch caused by the preinliner.
 static cl::opt<bool> DoComdatRenaming(
@@ -1841,6 +1846,8 @@ static uint32_t getMaxNumAnnotations(InstrProfValueKind ValueProfKind) {
     return MaxNumMemOPAnnotations;
   if (ValueProfKind == llvm::IPVK_VTableTarget)
     return MaxNumVTableAnnotations;
+  if (ValueProfKind == llvm::IPVK_ArgumentValue)
+    return MaxNumArgumentValueAnnotations;
   return MaxNumAnnotations;
 }
 
