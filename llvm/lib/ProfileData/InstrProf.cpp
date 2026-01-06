@@ -236,7 +236,7 @@ cl::opt<bool> EnableVTableProfileUse(
              "call sequence. If false, type profiles won't be used."));
 
 cl::opt<bool> EnableArgumentValueProfiling(
-    "enable-argument-value-profiling", cl::init(false),
+    "enable-argument-value-profiling", cl::init(true),
     cl::desc("If true, argument values will be profiled at every callsite. "
 	     "This information will be used by the function specialization "
              "pass for specialization on non-constant arguments."));
