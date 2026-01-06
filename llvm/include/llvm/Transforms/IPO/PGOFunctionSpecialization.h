@@ -22,28 +22,11 @@
 #include "llvm/Transforms/Utils/SizeOpts.h"
 
 namespace llvm {
-using PGOSpecMap = DenseMap<Function *, std::pair<unsigned, unsigned>>;
-
-struct PGOSpecSig {
-  unsigned Key = 0;
-  SmallVector<ArgInfo, 4> Args;
-
-  bool operator==(const PGOSpecSig &Other) const {
-    if (Key != Other.Key)
-      return false;
-    return Args == Other.Args;
-  }
-
-  friend hash_code hash_value(const PGOSpecSig &S) {
-    return hash_combine(hash_value(S.Key), hash_combine_range(S.Args));
-  }
-};
-
 struct PGOSpec {
   Function *F;
   Function *Clone = nullptr;
-  PGOSpecSig Sig;
   Function *ExistingFunc = nullptr; // Pre-existing specialization to reuse
+  ArgInfo Arg;
   unsigned OriginalCodeSize;
   unsigned OriginalLatency;
   unsigned SpecializedCodeSize;
@@ -51,18 +34,21 @@ struct PGOSpec {
   unsigned Count;
   SmallVector<CallBase *> CallSites;
 
-  PGOSpec(Function *F, Function *Clone, const PGOSpecSig &S, unsigned OrigCodeSize, unsigned OrigLatency,
-          unsigned SpecCodeSize, unsigned SpecLatency, unsigned Cnt)
-      : F(F), Clone(Clone), Sig(S), OriginalCodeSize(OrigCodeSize), OriginalLatency(OrigLatency),
-        SpecializedCodeSize(SpecCodeSize), SpecializedLatency(SpecLatency), Count(Cnt) {}
-  PGOSpec(Function *F, Function *Clone, const PGOSpecSig &&S, unsigned OrigCodeSize, unsigned OrigLatency,
-          unsigned SpecCodeSize, unsigned SpecLatency, unsigned Cnt)
-      : F(F), Clone(Clone), Sig(S), OriginalCodeSize(OrigCodeSize), OriginalLatency(OrigLatency),
-        SpecializedCodeSize(SpecCodeSize), SpecializedLatency(SpecLatency), Count(Cnt) {}
+  PGOSpec(Function *F, Function *Clone, const ArgInfo &A, unsigned OrigCodeSize,
+          unsigned OrigLatency, unsigned SpecCodeSize, unsigned SpecLatency,
+          unsigned Cnt)
+      : F(F), Clone(Clone), Arg(A), OriginalCodeSize(OrigCodeSize),
+        OriginalLatency(OrigLatency), SpecializedCodeSize(SpecCodeSize),
+        SpecializedLatency(SpecLatency), Count(Cnt) {}
+  PGOSpec(Function *F, Function *Clone, const ArgInfo &&A,
+          unsigned OrigCodeSize, unsigned OrigLatency, unsigned SpecCodeSize,
+          unsigned SpecLatency, unsigned Cnt)
+      : F(F), Clone(Clone), Arg(A), OriginalCodeSize(OrigCodeSize),
+        OriginalLatency(OrigLatency), SpecializedCodeSize(SpecCodeSize),
+        SpecializedLatency(SpecLatency), Count(Cnt) {}
 };
 
 class PGOFunctionSpecializer {
-
   Module &M;
   FunctionAnalysisManager *FAM;
   std::function<BlockFrequencyInfo &(Function &)> GetBFI;
@@ -72,10 +58,7 @@ class PGOFunctionSpecializer {
   std::function<DominatorTree &(Function &)> GetDT;
   int OptLevel;
 
-  SmallPtrSet<Function *, 32> Specializations;
-  SmallPtrSet<Function *, 32> FullySpecialized;
   DenseMap<Function *, CodeMetrics> FunctionMetrics;
-  unsigned NGlobals = 0;
 
 public:
   PGOFunctionSpecializer(
@@ -99,7 +82,7 @@ private:
   std::pair<unsigned, unsigned> calculateFunctionSizeLatency(Function *F);
 
   bool findSpecializations(Function *F, unsigned FuncSize,
-                           SmallVectorImpl<PGOSpec> &AllSpecs, PGOSpecMap &SM);
+                           SmallVectorImpl<PGOSpec> &AllSpecs);
 
   bool isCandidateFunction(Function *F);
 };

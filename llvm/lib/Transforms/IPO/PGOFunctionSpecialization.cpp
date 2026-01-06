@@ -190,7 +190,6 @@ PGOFunctionSpecializer::~PGOFunctionSpecializer() {
 }
 
 bool PGOFunctionSpecializer::run() {
-  PGOSpecMap SM;
   SmallVector<PGOSpec, 32> AllSpecs;
   unsigned NumCandidates = 0;
   for (Function &F : M) {
@@ -222,12 +221,12 @@ bool PGOFunctionSpecializer::run() {
     assert(Sz > 0 && "CodeSize should be positive");
     unsigned FuncSize = static_cast<unsigned>(Sz);
 
-    dbgs() << "PGOFnSpecialization: Specialization cost for "
-                      << F.getName() << " is " << FuncSize << "\n";
+    dbgs() << "PGOFnSpecialization: Specialization cost for " << F.getName()
+           << " is " << FuncSize << "\n";
 
-    if (!findSpecializations(&F, FuncSize, AllSpecs, SM)) {
+    if (!findSpecializations(&F, FuncSize, AllSpecs)) {
       dbgs() << "PGOFnSpecialization: No possible specializations found for "
-                 << F.getName() << "\n";
+             << F.getName() << "\n";
       continue;
     }
 
@@ -248,29 +247,22 @@ bool PGOFunctionSpecializer::run() {
   for (unsigned I = 0; I < NSpecs; ++I) {
     const PGOSpec &S = AllSpecs[BestSpecs[I]];
     dbgs() << "PGOFnSpecialization: Function " << S.F->getName()
-           << " , OriginalLatency " << S.OriginalLatency << " , SpecializedLatency " << S.SpecializedLatency
-           << " , Count " << S.Count << " , SpecializedCodeSize " << S.SpecializedCodeSize << "\n";
-    for (const ArgInfo &Arg : S.Sig.Args)
-      dbgs() << "PGOFnSpecialization:   FormalArg = "
-             << Arg.Formal->getNameOrAsOperand()
-             << ", ActualArg = " << Arg.Actual->getNameOrAsOperand()
-             << "\n";
+           << " , OriginalLatency " << S.OriginalLatency
+           << " , SpecializedLatency " << S.SpecializedLatency << " , Count "
+           << S.Count << " , SpecializedCodeSize " << S.SpecializedCodeSize
+           << "\n";
+    dbgs() << "PGOFnSpecialization:   FormalArg = "
+           << S.Arg.Formal->getNameOrAsOperand()
+           << ", ActualArg = " << S.Arg.Actual->getNameOrAsOperand() << "\n";
   }
 
-  SmallPtrSet<Function *, 8> OriginalFuncs;
-  SmallVector<Function *> Clones;
   DenseMap<CallBase *, SmallVector<PGOSpec *>> CallSiteSpecs;
   for (unsigned I = 0; I < NSpecs; ++I) {
     PGOSpec &S = AllSpecs[BestSpecs[I]];
 
-    Specializations.insert(S.Clone);
-
-    for (CallBase *Call : S.CallSites) {
-      CallSiteSpecs[Call].push_back(&S);
+    for (CallBase *C : S.CallSites) {
+      CallSiteSpecs[C].push_back(&S);
     }
-
-    Clones.push_back(S.Clone);
-    OriginalFuncs.insert(S.F);
   }
 
   for (auto &[CS, Specs] : CallSiteSpecs) {
@@ -306,7 +298,7 @@ bool PGOFunctionSpecializer::run() {
 
     DomTreeUpdater DTU(&DT, DomTreeUpdater::UpdateStrategy::Eager);
 
-    auto ArgNo = Specs[0]->Sig.Args[0].Formal->getArgNo();
+    auto ArgNo = Specs[0]->Arg.Formal->getArgNo();
     Value *ArgVar = CS->getArgOperand(ArgNo);
 
     // Bitcast float/double to integer for switch
@@ -342,7 +334,7 @@ bool PGOFunctionSpecializer::run() {
 
     unsigned CaseIdx = 0;
     for (PGOSpec *SpecPtr : Specs) {
-      Constant *SpecArgVal = SpecPtr->Sig.Args[0].Actual;
+      Constant *SpecArgVal = SpecPtr->Arg.Actual;
       BasicBlock *CaseBB = BasicBlock::Create(
           Ctx, Twine("CS.Case.") + Twine(CaseIdx++), Func, DefaultBB);
       CallBase *NewCB = cast<CallBase>(CS->clone());
@@ -383,7 +375,7 @@ bool PGOFunctionSpecializer::run() {
     DTU.applyUpdates(Updates);
   }
 
-  return false;
+  return !CallSiteSpecs.empty();
 }
 
 static Constant *synthesizeConstant(Type *T, uint64_t V) {
@@ -418,31 +410,32 @@ bool PGOFunctionSpecializer::findSpecializations(Function *F, unsigned FuncSize,
   }
 
   if (Args.empty()) {
-    dbgs() << "No args\n";
     return false;
   }
 
-  for (User *U : F->users()) {
-    if (!isa<CallInst>(U) && !isa<InvokeInst>(U)) {
-      dbgs() << "Not call!\n";
-      continue;
-    }
+  uint64_t BestArgSpecsScore = 0;
+  DenseMap<Constant *, PGOSpec> BestArgSpecs;
 
+  for (auto [A, VPIdx] : Args) {
+    DenseMap<Constant *, PGOSpec> ArgSpecsMap;
 
-    auto &CS = *cast<CallBase>(U);
+    for (User *U : F->users()) {
+      if (!isa<CallInst>(U) && !isa<InvokeInst>(U)) {
+        continue;
+      }
 
-    if (CS.getCalledFunction() != F)
-      continue;
+      auto &CS = *cast<CallBase>(U);
 
-    if (CS.hasFnAttr(Attribute::MinSize))
-      continue;
+      if (CS.getCalledFunction() != F)
+        continue;
 
-    for (auto [A, VPIdx] : Args) {
       uint64_t TotalCount;
       auto ValueProfData = getValueProfDataFromInst(CS, IPVK_ArgumentValue, 5,
                                                  TotalCount, false, VPIdx);
       auto &BFI = GetBFI(*F);
       auto BBEdgeCount = BFI.getBlockProfileCount(CS.getParent());
+      dbgs() << "TotalCount " << TotalCount << " , BBEdgeCount "
+             << (BBEdgeCount ? *BBEdgeCount : 0) << '\n';
       if (BBEdgeCount) {
         // Use block profile count as the total if available, it is more
         // accurate as value profile counts will miss rare value counts.
@@ -461,14 +454,10 @@ bool PGOFunctionSpecializer::findSpecializations(Function *F, unsigned FuncSize,
         if (ValProp < AnalysisCutoffThresh)
           continue;
 
-
         Constant *C = synthesizeConstant(A->getType(), ProfiledValue.Value);
         if (!C) {
           continue;
         }
-
-        PGOSpecSig S;
-        S.Args.push_back({A, C});
 
         auto checkWeightedSpecializedLatency = [&](unsigned SpecializedLatency) {
           if (OriginalLatency == 0)
@@ -483,13 +472,12 @@ bool PGOFunctionSpecializer::findSpecializations(Function *F, unsigned FuncSize,
           return WeightedLatency < CandidateCutoffThresh;
         };
 
-        if (auto It = UniqueSpecs.find(S); It != UniqueSpecs.end()) {
-          const unsigned Index = It->second;
-          if (!checkWeightedSpecializedLatency(AllSpecs[Index].SpecializedLatency))
+        if (auto It = ArgSpecsMap.find(C); It != ArgSpecsMap.end()) {
+          if (!checkWeightedSpecializedLatency(It->second.SpecializedLatency))
             continue;
 
-          AllSpecs[Index].CallSites.push_back(&CS);
-          AllSpecs[Index].Count += ProfiledValue.Count;
+          It->second.CallSites.push_back(&CS);
+          It->second.Count += ProfiledValue.Count;
         } else {
           auto [ClonedF, ExistingFunc] =
               cloneFunctionSpecialized(F, A, C, ProfiledValue.Value);
@@ -503,25 +491,50 @@ bool PGOFunctionSpecializer::findSpecializations(Function *F, unsigned FuncSize,
 
           if (!checkWeightedSpecializedLatency(SpecializedLatency))
             continue;
+          }
 
-          auto &PGOSpec = AllSpecs.emplace_back(F, ClonedF, S, OriginalCodeSize, OriginalLatency,
-                                                SpecializedCodeSize, SpecializedLatency,
-                                                ProfiledValue.Count);
-          PGOSpec.CallSites.push_back(&CS);
-          PGOSpec.ExistingFunc = ExistingFunc;
-          const unsigned Index = AllSpecs.size() - 1;
-          UniqueSpecs[S] = Index;
-          if (auto [It, Inserted] = SM.try_emplace(F, Index, Index + 1);
-              !Inserted)
-            It->second.second = Index + 1;
+          auto ASIt =
+              ArgSpecsMap.insert(std::pair{C, PGOSpec{F,
+                                                      ClonedF,
+                                                      {A, C},
+                                                      OriginalCodeSize,
+                                                      OriginalLatency,
+                                                      SpecializedCodeSize,
+                                                      SpecializedLatency,
+                                                      ProfiledValue.Count}});
+          ASIt.first->second.ExistingFunc = ExistingFunc;
+          ASIt.first->second.CallSites.push_back(&CS);
+        }
+      }
+    }
+
+    uint64_t Score =
+        std::accumulate(ArgSpecsMap.begin(), ArgSpecsMap.end(), 0,
+                        [](uint64_t Acc, const auto &KV) {
+                          return Acc + (KV.second.OriginalLatency -
+                                        KV.second.SpecializedLatency) *
+                                           KV.second.Count;
+                        });
+
+    dbgs() << "PGOFnSpecialization: Argument=" << A->getArgNo()
+           << " , Score=" << Score << "\n";
+
+    if (Score > BestArgSpecsScore) {
+      for (auto &[Const, Spec] : BestArgSpecs) {
         }
       }
 
-      break; // Multiple args are hard!! need to find arg that specializes best and drop all others, do later
+      BestArgSpecs = std::move(ArgSpecsMap);
+      BestArgSpecsScore = Score;
     }
   }
 
-  return !UniqueSpecs.empty();
+  AllSpecs.reserve(AllSpecs.size() + BestArgSpecs.size());
+  std::transform(BestArgSpecs.begin(), BestArgSpecs.end(),
+                 std::back_inserter(AllSpecs),
+                 [](const auto &kv) { return kv.second; });
+
+  return !BestArgSpecs.empty();
 }
 
 bool PGOFunctionSpecializer::isCandidateFunction(Function *F) {
