@@ -65,24 +65,24 @@ static cl::opt<unsigned> MinFunctionSize(
              "instructions"));
 
 static cl::opt<unsigned>
-    AnalysisCutoffThresh("pgofuncspec-analysis-cutoff-thresh", cl::init(15),
+    AnalysisCutoffThresh("pgofuncspec-analysis-cutoff-thresh", cl::init(50),
                          cl::Hidden, cl::desc("TODO"));
 
 static cl::opt<unsigned>
-    CandidateCutoffThresh("pgofuncspec-candidate-cutoff-thresh", cl::init(95),
+    CandidateCutoffThresh("pgofuncspec-candidate-cutoff-thresh", cl::init(97),
                           cl::Hidden, cl::desc("TODO"));
 
-static cl::opt<unsigned> DispatchCost("pgofuncspec-dispatch-cost", cl::init(10),
+static cl::opt<unsigned> DispatchCost("pgofuncspec-dispatch-cost", cl::init(7),
                                       cl::Hidden, cl::desc("TODO"));
 
 static cl::opt<unsigned> HotFuncThresh("pgofuncspec-hot-func-thresh",
                                        cl::init(3500), cl::Hidden,
                                        cl::desc("TODO"));
-static cl::opt<unsigned> BlowupFactor("pgofuncspec-blowup-factor", cl::init(2),
+static cl::opt<unsigned> BlowupFactor("pgofuncspec-blowup-factor", cl::init(300),
                                       cl::Hidden, cl::desc("TODO"));
 
 static cl::opt<unsigned> MaxSpecSize("pgofuncspec-max-spec-size",
-                                     cl::init(1000), cl::Hidden,
+                                     cl::init(2000), cl::Hidden,
                                      cl::desc("TODO"));
 
 static cl::opt<unsigned> MinLatencyThresh("pgofuncspec-min-latency-thresh",
