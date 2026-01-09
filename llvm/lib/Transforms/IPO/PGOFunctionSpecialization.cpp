@@ -23,6 +23,7 @@
 #include "llvm/IR/PassManager.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/ProfileData/InstrProf.h"
+#include "llvm/Transforms/Instrumentation/PGOInstrumentation.h"
 #include "llvm/Transforms/AggressiveInstCombine/AggressiveInstCombine.h"
 #include "llvm/Transforms/InstCombine/InstCombine.h"
 #include "llvm/Transforms/Scalar/ADCE.h"
@@ -328,6 +329,13 @@ bool PGOFunctionSpecializer::run() {
 
     DominatorTree &DT = GetDT(*Func);
     BasicBlock *BB = CS->getParent();
+
+    auto &BFI = GetBFI(*Func);
+    uint64_t TotalCount = 0;
+    auto OrigBBFreq = BFI.getBlockFreq(BB);
+    if (auto Count = BFI.getBlockProfileCount(BB))
+      TotalCount = *Count;
+
     BasicBlock *DefaultBB = nullptr;
     BasicBlock *MergeBB = nullptr;
     BasicBlock *UnwindBB = nullptr;
@@ -348,6 +356,9 @@ bool PGOFunctionSpecializer::run() {
       assert(It != DefaultBB->end());
       MergeBB = SplitBlock(DefaultBB, &(*It), &DT);
     }
+
+    // While this pass invalidates BFI, there could be multiple call instructions that trigger specialization within the same block. As we depend on BFI to calculate switch weights for each specialization at a call instruction this information should be kept up to date.
+    BFI.setBlockFreq(MergeBB, OrigBBFreq);
 
     MergeBB->setName("CS.Merge");
     DefaultBB->setName("CS.Default");
@@ -371,6 +382,16 @@ bool PGOFunctionSpecializer::run() {
     }
 
     SwitchInst *SI = IRB.CreateSwitch(ArgVar, DefaultBB, Specs.size());
+
+    uint64_t SumSpecCounts = std::accumulate(Specs.begin(), Specs.end(), 0, [](uint64_t Acc, const PGOSpec *Spec) {
+      return Acc + Spec->Count;
+    });
+
+    SmallVector<uint64_t, 16> CaseCounts;
+    uint64_t DefaultCount = (TotalCount > SumSpecCounts) ? TotalCount - SumSpecCounts : 0;
+    uint64_t MaxCount = DefaultCount;
+    CaseCounts.push_back(DefaultCount);
+
     Term->eraseFromParent();
 
     Type *CSTy = CS->getType();
@@ -425,10 +446,16 @@ bool PGOFunctionSpecializer::run() {
       Updates.push_back({DominatorTree::Insert, CaseBB, MergeBB});
       Updates.push_back({DominatorTree::Insert, BB, CaseBB});
 
+      MaxCount = std::max(MaxCount, SpecPtr->Count);
+      CaseCounts.push_back(SpecPtr->Count);
+
       dbgs() << *CaseBB << "\n";
     }
 
     DTU.applyUpdates(Updates);
+
+    // Will be used to regenerate BFI appropriately, safe as this pass invalidates it
+    setProfMetadata(Func->getParent(), SI, CaseCounts, MaxCount);
   }
 
   // Clean up analysis clones that were only used for cost analysis
