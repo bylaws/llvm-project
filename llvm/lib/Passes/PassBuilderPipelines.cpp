@@ -1282,6 +1282,9 @@ PassBuilder::buildModuleSimplificationPipeline(OptimizationLevel Level,
 
   if (PGOOpt && PGOOpt->Action == PGOOptions::IRUse) {
     MPM.addPass(PGOFunctionSpecializationPass(Level.getSpeedupLevel()));
+
+    MPM.addPass(AlwaysInlinerPass(
+        /*InsertLifetimeIntrinsics=*/false));
   }
 
   // Remove any dead arguments exposed by cleanups, constant folding globals,

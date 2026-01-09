@@ -87,6 +87,10 @@ static cl::opt<unsigned> MaxSpecSize("pgofuncspec-max-spec-size",
 static cl::opt<unsigned> MinLatencyThresh("pgofuncspec-min-latency-thresh",
                                           cl::init(5), cl::Hidden,
                                           cl::desc("TODO"));
+
+static cl::opt<unsigned> MaxSpecInlineSize("pgofuncspec-max-spec-inline-size",
+                                           cl::init(10), cl::Hidden,
+                                           cl::desc("TODO"));
 std::pair<Function *, Function *>
 PGOFunctionSpecializer::cloneFunctionSpecialized(Function *F, Argument *Arg,
                                                  Constant *C, uint64_t V) {
@@ -623,6 +627,11 @@ bool PGOFunctionSpecializer::findSpecializations(
                  << OriginalCodeSize << " Latency=" << OriginalLatency
                  << " Specialized CodeSize=" << SpecializedCodeSize
                  << " Latency=" << SpecializedLatency << "\n";
+
+
+          if (SpecializedCodeSize < MaxSpecInlineSize) {
+            ClonedF->addFnAttr(Attribute::AlwaysInline);
+          }
 
           if (!checkWeightedSpecializedLatency(OriginalLatency,
                                                SpecializedLatency) ||
