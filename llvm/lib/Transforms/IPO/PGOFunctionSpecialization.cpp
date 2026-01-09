@@ -154,16 +154,21 @@ PGOFunctionSpecializer::cloneFunctionSpecialized(Function *F, Argument *Arg,
 
   FPM.run(*ClonedF, *FAM);
 
+
   // If no existing function was found, finalize the clone as the actual
   // specialization
   if (!ExistingFunc) {
     ClonedF->addFnAttr("pgo.specialization");
     ClonedF->setName(NewName);
-    ClonedF->setLinkage(GlobalValue::LinkOnceODRLinkage);
-    ClonedF->setVisibility(GlobalValue::HiddenVisibility);
-    Comdat *CD = M.getOrInsertComdat(NewName);
-    CD->setSelectionKind(Comdat::Any);
-    ClonedF->setComdat(CD);
+    if (F->hasLocalLinkage()) {
+      ClonedF->setLinkage(GlobalValue::InternalLinkage);
+    } else {
+      ClonedF->setLinkage(GlobalValue::LinkOnceODRLinkage);
+      ClonedF->setVisibility(GlobalValue::HiddenVisibility);
+      Comdat *CD = M.getOrInsertComdat(NewName);
+      CD->setSelectionKind(Comdat::Any);
+      ClonedF->setComdat(CD);
+    }
   }
 
   return {ClonedF, ExistingFunc};
