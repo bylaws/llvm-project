@@ -1272,10 +1272,6 @@ PassBuilder::buildModuleSimplificationPipeline(OptimizationLevel Level,
                  PGOOpt->Action == PGOOptions::SampleUse))
     MPM.addPass(PGOForceFunctionAttrsPass(PGOOpt->ColdOptType));
 
-  if (IsPGOInstrUse) {
-    MPM.addPass(PGOFunctionSpecializationPass(Level.getSpeedupLevel()));
-  }
-
 
   MPM.addPass(AlwaysInlinerPass(/*InsertLifetimeIntrinsics=*/true));
 
@@ -1283,6 +1279,10 @@ PassBuilder::buildModuleSimplificationPipeline(OptimizationLevel Level,
     MPM.addPass(buildModuleInlinerPipeline(Level, Phase));
   else
     MPM.addPass(buildInlinerPipeline(Level, Phase));
+
+  if (PGOOpt && PGOOpt->Action == PGOOptions::IRUse) {
+    MPM.addPass(PGOFunctionSpecializationPass(Level.getSpeedupLevel()));
+  }
 
   // Remove any dead arguments exposed by cleanups, constant folding globals,
   // and argument promotion.
