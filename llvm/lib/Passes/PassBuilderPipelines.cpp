@@ -1280,7 +1280,7 @@ PassBuilder::buildModuleSimplificationPipeline(OptimizationLevel Level,
   else
     MPM.addPass(buildInlinerPipeline(Level, Phase));
 
-  if (PGOOpt && PGOOpt->Action == PGOOptions::IRUse) {
+  if (Phase != ThinOrFullLTOPhase::ThinLTOPreLink) {
     MPM.addPass(PGOFunctionSpecializationPass(Level.getSpeedupLevel()));
 
     MPM.addPass(AlwaysInlinerPass(
