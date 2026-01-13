@@ -33,20 +33,15 @@ struct PGOSpec {
   unsigned SpecializedCodeSize;
   unsigned SpecializedLatency;
   uint64_t Count;
+  unsigned MinValueProp;
   SmallVector<CallBase *> CallSites;
 
-  PGOSpec(Function *F, Function *Clone, const ArgInfo &A, unsigned OrigCodeSize,
+  PGOSpec(Function *F, Function *Clone, Function *Existing, ArgInfo &&A, unsigned OrigCodeSize,
           unsigned OrigLatency, unsigned SpecCodeSize, unsigned SpecLatency,
-          uint64_t Cnt)
-      : F(F), Clone(Clone), Arg(A), OriginalCodeSize(OrigCodeSize),
+          uint64_t Cnt, unsigned ValueProp)
+      : F(F), Clone(Clone), ExistingFunc(Existing), Arg(A), OriginalCodeSize(OrigCodeSize),
         OriginalLatency(OrigLatency), SpecializedCodeSize(SpecCodeSize),
-        SpecializedLatency(SpecLatency), Count(Cnt) {}
-  PGOSpec(Function *F, Function *Clone, const ArgInfo &&A,
-          unsigned OrigCodeSize, unsigned OrigLatency, unsigned SpecCodeSize,
-          unsigned SpecLatency, uint64_t Cnt)
-      : F(F), Clone(Clone), Arg(A), OriginalCodeSize(OrigCodeSize),
-        OriginalLatency(OrigLatency), SpecializedCodeSize(SpecCodeSize),
-        SpecializedLatency(SpecLatency), Count(Cnt) {}
+        SpecializedLatency(SpecLatency), Count(Cnt), MinValueProp(ValueProp) {}
 };
 
 class PGOFunctionSpecializer {

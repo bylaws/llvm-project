@@ -312,7 +312,7 @@ bool PGOFunctionSpecializer::run() {
            << " , OriginalLatency " << S.OriginalLatency
            << " , SpecializedLatency " << S.SpecializedLatency << " , Count "
            << S.Count << " , SpecializedCodeSize " << S.SpecializedCodeSize
-           << "\n";
+           << " , MinValueProp " << S.MinValueProp << "\n";
     dbgs() << "PGOFnSpecialization:   FormalArg = "
            << S.Arg.Formal->getNameOrAsOperand()
            << ", ActualArg = " << S.Arg.Actual->getNameOrAsOperand() << "\n";
@@ -599,7 +599,7 @@ bool PGOFunctionSpecializer::findSpecializations(
       for (const auto &ProfiledValue : ValueProfData) {
         // Drop values that have a percentage of calls below the configured
         // cutoff.
-        uint64_t ValProp = (ProfiledValue.Count * 100) / TotalCount;
+        unsigned ValProp = (ProfiledValue.Count * 100) / TotalCount;
         dbgs() << "PGOFnSpecialization: Value " << ProfiledValue.Value
                << " , ValProp " << ValProp << '\n';
 
@@ -646,6 +646,7 @@ bool PGOFunctionSpecializer::findSpecializations(
 
           It->second.CallSites.push_back(&CS);
           It->second.Count += ProfiledValue.Count;
+          It->second.MinValueProp = std::min(It->second.MinValueProp, ValProp);
         } else {
           auto [ClonedF, ExistingFunc] =
               cloneFunctionSpecialized(F, A, C, ProfiledValue.Value);
@@ -677,15 +678,16 @@ bool PGOFunctionSpecializer::findSpecializations(
           }
 
           auto ASIt =
-              ArgSpecsMap.insert(std::pair{C, PGOSpec{F,
+              ArgSpecsMap.try_emplace(C, F,
                                                       ClonedF,
-                                                      {A, C},
+              ExistingFunc,
+                                                      ArgInfo{A, C},
                                                       OriginalCodeSize,
                                                       OriginalLatency,
                                                       SpecializedCodeSize,
                                                       SpecializedLatency,
-                                                      ProfiledValue.Count}});
-          ASIt.first->second.ExistingFunc = ExistingFunc;
+                                                      ProfiledValue.Count,
+                                          ValProp);
           ASIt.first->second.CallSites.push_back(&CS);
         }
       }
