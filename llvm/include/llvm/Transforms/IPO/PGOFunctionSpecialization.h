@@ -34,7 +34,13 @@ struct PGOSpec {
   unsigned SpecializedLatency;
   uint64_t Count;
   unsigned MinValueProp;
-  SmallVector<CallBase *> CallSites;
+  SmallVector<std::pair<CallBase *, uint64_t>> CallSites;
+
+  Function *getSpecializedFunc() {
+    // Use existing function if available, otherwise use the newly created
+    // clone
+    return ExistingFunc ? ExistingFunc : Clone;
+  }
 
   PGOSpec(Function *F, Function *Clone, Function *Existing, ArgInfo &&A, unsigned OrigCodeSize,
           unsigned OrigLatency, unsigned SpecCodeSize, unsigned SpecLatency,

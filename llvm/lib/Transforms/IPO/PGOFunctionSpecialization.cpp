@@ -318,16 +318,27 @@ bool PGOFunctionSpecializer::run() {
            << ", ActualArg = " << S.Arg.Actual->getNameOrAsOperand() << "\n";
   }
 
-  DenseMap<CallBase *, SmallVector<PGOSpec *>> CallSiteSpecs;
+  struct CallSiteSpecsItem {
+    uint64_t TotalCount = 0;
+    SmallVector<std::pair<PGOSpec *, uint64_t>> Specs;
+  };
+
+  DenseMap<CallBase *, CallSiteSpecsItem> CallSiteSpecs;
   for (unsigned I = 0; I < NSpecs; ++I) {
     PGOSpec &S = AllSpecs[BestSpecs[I]];
 
-    for (CallBase *C : S.CallSites) {
-      CallSiteSpecs[C].push_back(&S);
+    auto *Func = S.getSpecializedFunc();
+    auto SpecFuncEntryCount = Func->getEntryCount();
+    Func->setEntryCount(SpecFuncEntryCount->getCount() + S.Count, SpecFuncEntryCount->getType());
+
+    for (auto &[C, Count] : S.CallSites) {
+      auto &Item = CallSiteSpecs[C];
+      Item.TotalCount += Count;
+      Item.Specs.push_back({&S, Count});
     }
   }
 
-  for (auto &[CS, Specs] : CallSiteSpecs) {
+  for (auto &[CS, SpecsInfo] : CallSiteSpecs) {
     // Derived from PGOMemOPSizeOpt, extended to support FP types and invoke
     Function *Func = CS->getFunction();
     auto &Ctx = Func->getContext();
@@ -336,10 +347,10 @@ bool PGOFunctionSpecializer::run() {
     BasicBlock *BB = CS->getParent();
 
     auto &BFI = GetBFI(*Func);
-    uint64_t TotalCount = 0;
     auto OrigBBFreq = BFI.getBlockFreq(BB);
-    if (auto Count = BFI.getBlockProfileCount(BB))
-      TotalCount = *Count;
+    uint64_t TotalCount = BFI.getBlockProfileCount(BB).value_or(0);
+
+    CS->setMetadata(LLVMContext::MD_prof, nullptr);
 
     BasicBlock *DefaultBB = nullptr;
     BasicBlock *MergeBB = nullptr;
@@ -370,7 +381,7 @@ bool PGOFunctionSpecializer::run() {
 
     DomTreeUpdater DTU(&DT, DomTreeUpdater::UpdateStrategy::Eager);
 
-    auto ArgNo = Specs[0]->Arg.Formal->getArgNo();
+    auto ArgNo = SpecsInfo.Specs[0].first->Arg.Formal->getArgNo();
     Value *ArgVar = CS->getArgOperand(ArgNo);
 
     // Bitcast float/double to integer for switch
@@ -386,16 +397,16 @@ bool PGOFunctionSpecializer::run() {
       ArgVar = IRB.CreateBitCast(ArgVar, IntType);
     }
 
-    SwitchInst *SI = IRB.CreateSwitch(ArgVar, DefaultBB, Specs.size());
-
-    uint64_t SumSpecCounts = std::accumulate(Specs.begin(), Specs.end(), 0, [](uint64_t Acc, const PGOSpec *Spec) {
-      return Acc + Spec->Count;
-    });
+    SwitchInst *SI = IRB.CreateSwitch(ArgVar, DefaultBB, SpecsInfo.Specs.size());
 
     SmallVector<uint64_t, 16> CaseCounts;
-    uint64_t DefaultCount = (TotalCount > SumSpecCounts) ? TotalCount - SumSpecCounts : 0;
+    uint64_t DefaultCount = (TotalCount > SpecsInfo.TotalCount) ? TotalCount - SpecsInfo.TotalCount : 0;
     uint64_t MaxCount = DefaultCount;
     CaseCounts.push_back(DefaultCount);
+
+    auto OrigFuncEntryCount = Func->getEntryCount();
+    Func->setEntryCount(OrigFuncEntryCount->getCount() > SpecsInfo.TotalCount ?
+                        (OrigFuncEntryCount->getCount() - SpecsInfo.TotalCount) : 0, OrigFuncEntryCount->getType());
 
     Term->eraseFromParent();
 
@@ -404,7 +415,7 @@ bool PGOFunctionSpecializer::run() {
     if (!CSTy->isVoidTy()) {
       // Insert a phi for the return values at the merge block.
       IRBuilder<> IRBM(MergeBB, MergeBB->getFirstNonPHIIt());
-      PHI = IRBM.CreatePHI(CSTy, Specs.size() + 1, "CS.RVMerge");
+      PHI = IRBM.CreatePHI(CSTy, SpecsInfo.Specs.size() + 1, "CS.RVMerge");
       CS->replaceAllUsesWith(PHI);
       PHI->addIncoming(CS, DefaultBB);
     }
@@ -412,19 +423,16 @@ bool PGOFunctionSpecializer::run() {
     dbgs() << "\n\n== Basic Block After==\n";
 
     std::vector<DominatorTree::UpdateType> Updates;
-    Updates.reserve(2 * Specs.size());
+    Updates.reserve(2 * SpecsInfo.Specs.size());
 
     unsigned CaseIdx = 0;
-    for (PGOSpec *SpecPtr : Specs) {
+    for (auto &[SpecPtr, Count] : SpecsInfo.Specs) {
       Constant *SpecArgVal = SpecPtr->Arg.Actual;
       BasicBlock *CaseBB = BasicBlock::Create(
           Ctx, Twine("CS.Case.") + Twine(CaseIdx++), Func, DefaultBB);
       CallBase *NewCB = cast<CallBase>(CS->clone());
 
-      // Use existing function if available, otherwise use the newly created
-      // clone
-      Function *FuncToCall =
-          SpecPtr->ExistingFunc ? SpecPtr->ExistingFunc : SpecPtr->Clone;
+      Function *FuncToCall = SpecPtr->getSpecializedFunc();
       NewCB->setCalledFunction(FuncToCall);
       NewCB->setArgOperand(ArgNo, SpecArgVal);
       NewCB->insertInto(CaseBB, CaseBB->end());
@@ -451,8 +459,8 @@ bool PGOFunctionSpecializer::run() {
       Updates.push_back({DominatorTree::Insert, CaseBB, MergeBB});
       Updates.push_back({DominatorTree::Insert, BB, CaseBB});
 
-      MaxCount = std::max(MaxCount, SpecPtr->Count);
-      CaseCounts.push_back(SpecPtr->Count);
+      MaxCount = std::max(MaxCount, Count);
+      CaseCounts.push_back(Count);
 
       dbgs() << *CaseBB << "\n";
     }
@@ -464,8 +472,8 @@ bool PGOFunctionSpecializer::run() {
   }
 
   // Clean up analysis clones that were only used for cost analysis
-  for (auto &[CS, Specs] : CallSiteSpecs) {
-    for (PGOSpec *SpecPtr : Specs) {
+  for (auto &[CS, SpecsInfo] : CallSiteSpecs) {
+    for (auto &[SpecPtr, Count] : SpecsInfo.Specs) {
       // If we reused an existing function, delete the analysis clone
       if (SpecPtr->ExistingFunc && SpecPtr->Clone) {
         dbgs() << "PGOFnSpecialization: Deleting analysis clone "
@@ -644,7 +652,7 @@ bool PGOFunctionSpecializer::findSpecializations(
                                                It->second.SpecializedLatency))
             continue;
 
-          It->second.CallSites.push_back(&CS);
+          It->second.CallSites.push_back({&CS, ProfiledValue.Count});
           It->second.Count += ProfiledValue.Count;
           It->second.MinValueProp = std::min(It->second.MinValueProp, ValProp);
         } else {
@@ -688,7 +696,7 @@ bool PGOFunctionSpecializer::findSpecializations(
                                                       SpecializedLatency,
                                                       ProfiledValue.Count,
                                           ValProp);
-          ASIt.first->second.CallSites.push_back(&CS);
+          ASIt.first->second.CallSites.push_back({&CS, ProfiledValue.Count});
         }
       }
     }
