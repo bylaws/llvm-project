@@ -1225,6 +1225,12 @@ PassBuilder::buildModuleSimplificationPipeline(OptimizationLevel Level,
 
   // Add all the requested passes for instrumentation PGO, if requested.
   if (IsPGOInstrGen || IsPGOInstrUse) {
+    CGSCCPassManager CGPM;
+    CGPM.addPass(ArgumentPromotionPass());
+    CGPM.addPass(CoroSplitPass(Level != OptimizationLevel::O0));
+    CGPM.addPass(CoroAnnotationElidePass());
+    MPM.addPass(createModuleToPostOrderCGSCCPassAdaptor(std::move(CGPM)));
+
     addPGOInstrPasses(MPM, Level,
                       /*RunProfileGen=*/IsPGOInstrGen,
                       /*IsCS=*/false, PGOOpt->AtomicCounterUpdate,
@@ -1274,17 +1280,14 @@ PassBuilder::buildModuleSimplificationPipeline(OptimizationLevel Level,
 
 
   MPM.addPass(AlwaysInlinerPass(/*InsertLifetimeIntrinsics=*/true));
-
   if (EnableModuleInliner)
     MPM.addPass(buildModuleInlinerPipeline(Level, Phase));
   else
     MPM.addPass(buildInlinerPipeline(Level, Phase));
 
-  if (Phase != ThinOrFullLTOPhase::ThinLTOPreLink) {
+  if (PGOOpt) {
     MPM.addPass(PGOFunctionSpecializationPass(Level.getSpeedupLevel()));
-
-    MPM.addPass(AlwaysInlinerPass(
-        /*InsertLifetimeIntrinsics=*/false));
+    MPM.addPass(AlwaysInlinerPass(/*InsertLifetimeIntrinsics=*/true));
   }
 
   // Remove any dead arguments exposed by cleanups, constant folding globals,
