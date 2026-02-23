@@ -12,11 +12,13 @@
 #include "llvm/Analysis/ConstantFolding.h"
 #include "llvm/Analysis/InlineCost.h"
 #include "llvm/Analysis/InstructionSimplify.h"
+#include "llvm/Analysis/OptimizationRemarkEmitter.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/Analysis/ValueLattice.h"
 #include "llvm/Analysis/ValueLatticeUtils.h"
 #include "llvm/Analysis/ValueTracking.h"
+#include "llvm/IR/DiagnosticInfo.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/IntrinsicInst.h"
@@ -102,8 +104,8 @@ PGOFunctionSpecializer::cloneFunctionSpecialized(Function *F, Argument *Arg,
   // Check if a function with this specialized name already exists in the module
   Function *ExistingFunc = M.getFunction(NewName);
   if (ExistingFunc) {
-    dbgs() << "PGOFnSpecialization: Found existing specialization " << NewName
-           << "\n";
+    LLVM_DEBUG(dbgs() << "PGOFnSpecialization: Found existing specialization "
+                      << NewName << "\n");
   }
 
   ValueToValueMapTy VMap;
@@ -283,12 +285,16 @@ bool PGOFunctionSpecializer::run() {
     assert(Sz > 0 && "CodeSize should be positive");
     unsigned FuncSize = static_cast<unsigned>(Sz);
 
-    dbgs() << "PGOFnSpecialization: Specialization cost for " << F.getName()
-           << " is " << FuncSize << "\n";
+    LLVM_DEBUG(dbgs() << "PGOFnSpecialization: Specialization cost for "
+                      << F.getName() << " is " << FuncSize << "\n");
 
     if (!findSpecializations(&F, FuncSize, AllSpecs, BlockTag)) {
-      dbgs() << "PGOFnSpecialization: No possible specializations found for "
-             << F.getName() << "\n";
+      auto &ORE = FAM->getResult<OptimizationRemarkEmitterAnalysis>(F);
+      ORE.emit([&]() {
+        return OptimizationRemarkMissed(DEBUG_TYPE, "NoSpecsFound", &F)
+               << "no profitable specializations found for "
+               << ore::NV("Function", &F);
+      });
       continue;
     }
 
@@ -296,8 +302,8 @@ bool PGOFunctionSpecializer::run() {
   }
 
   if (!NumCandidates) {
-    dbgs()
-        << "PGOFnSpecialization: No possible specializations found in module\n";
+    LLVM_DEBUG(dbgs() << "PGOFnSpecialization: No possible specializations "
+                         "found in module\n");
     return false;
   }
 
@@ -305,17 +311,21 @@ bool PGOFunctionSpecializer::run() {
   SmallVector<unsigned> BestSpecs(NSpecs + 1);
   std::iota(BestSpecs.begin(), BestSpecs.begin() + NSpecs, 0);
 
-  dbgs() << "PGOFnSpecialization: List of specializations \n";
+  LLVM_DEBUG(dbgs() << "PGOFnSpecialization: List of specializations\n");
   for (unsigned I = 0; I < NSpecs; ++I) {
     const PGOSpec &S = AllSpecs[BestSpecs[I]];
-    dbgs() << "PGOFnSpecialization: Function " << S.F->getName()
-           << " , OriginalLatency " << S.OriginalLatency
-           << " , SpecializedLatency " << S.SpecializedLatency << " , Count "
-           << S.Count << " , SpecializedCodeSize " << S.SpecializedCodeSize
-           << " , MinValueProp " << S.MinValueProp << "\n";
-    dbgs() << "PGOFnSpecialization:   FormalArg = "
-           << S.Arg.Formal->getNameOrAsOperand()
-           << ", ActualArg = " << S.Arg.Actual->getNameOrAsOperand() << "\n";
+    auto &ORE = FAM->getResult<OptimizationRemarkEmitterAnalysis>(*S.F);
+    ORE.emit([&]() {
+      return OptimizationRemark(DEBUG_TYPE, "Specialized", S.F)
+             << "specialized " << ore::NV("Function", S.F) << " on argument "
+             << ore::NV("ArgNo", S.Arg.Formal->getArgNo())
+             << " with latency reduction from "
+             << ore::NV("OriginalLatency", S.OriginalLatency) << " to "
+             << ore::NV("SpecializedLatency", S.SpecializedLatency)
+             << " (count: " << ore::NV("Count", S.Count)
+             << ", code size: "
+             << ore::NV("SpecializedCodeSize", S.SpecializedCodeSize) << ")";
+    });
   }
 
   struct CallSiteSpecsItem {
@@ -462,7 +472,7 @@ bool PGOFunctionSpecializer::run() {
       MaxCount = std::max(MaxCount, Count);
       CaseCounts.push_back(Count);
 
-      dbgs() << *CaseBB << "\n";
+      LLVM_DEBUG(dbgs() << *CaseBB << "\n");
     }
 
     DTU.applyUpdates(Updates);
@@ -476,8 +486,8 @@ bool PGOFunctionSpecializer::run() {
     for (auto &[SpecPtr, Count] : SpecsInfo.Specs) {
       // If we reused an existing function, delete the analysis clone
       if (SpecPtr->ExistingFunc && SpecPtr->Clone) {
-        dbgs() << "PGOFnSpecialization: Deleting analysis clone "
-               << SpecPtr->Clone->getName() << "\n";
+        LLVM_DEBUG(dbgs() << "PGOFnSpecialization: Deleting analysis clone "
+                          << SpecPtr->Clone->getName() << "\n");
         FAM->clear(*SpecPtr->Clone, SpecPtr->Clone->getName());
         SpecPtr->Clone->eraseFromParent();
         SpecPtr->Clone = nullptr;
@@ -489,7 +499,7 @@ bool PGOFunctionSpecializer::run() {
 }
 
 static Constant *synthesizeConstant(Type *T, uint64_t V) {
-  dbgs() << *T << '\n';
+  LLVM_DEBUG(dbgs() << *T << '\n');
   if (T->isIntegerTy()) {
     return llvm::ConstantInt::get(T, V);
   } else if (T->isFloatTy()) {
@@ -594,8 +604,8 @@ bool PGOFunctionSpecializer::findSpecializations(
                                                  TotalCount, false, VPIdx);
       auto &BFI = GetBFI(*F);
       auto BBEdgeCount = BFI.getBlockProfileCount(CS.getParent());
-      dbgs() << "TotalCount " << TotalCount << " , BBEdgeCount "
-             << (BBEdgeCount ? *BBEdgeCount : 0) << '\n';
+      LLVM_DEBUG(dbgs() << "TotalCount " << TotalCount << " , BBEdgeCount "
+                        << (BBEdgeCount ? *BBEdgeCount : 0) << '\n');
       if (BBEdgeCount) {
         // Use block profile count as the total if available, it is more
         // accurate as value profile counts will miss rare value counts.
@@ -709,8 +719,8 @@ bool PGOFunctionSpecializer::findSpecializations(
                                            KV.second.Count;
                         });
 
-    dbgs() << "PGOFnSpecialization: Argument=" << A->getArgNo()
-           << " , Score=" << Score << "\n";
+    LLVM_DEBUG(dbgs() << "PGOFnSpecialization: Argument=" << A->getArgNo()
+                      << " , Score=" << Score << "\n");
 
     if (Score > BestArgSpecsScore) {
       for (auto &[Const, Spec] : BestArgSpecs) {
@@ -760,7 +770,7 @@ bool PGOFunctionSpecializer::isCandidateFunction(Function *F) {
   if (F->hasFnAttribute("pgo.specialization"))
     return false;
 
-  dbgs() << "PGOFnSpecialization: Try function: " << F->getName() << "\n";
+
   return true;
 }
 
