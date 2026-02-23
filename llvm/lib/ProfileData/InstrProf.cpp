@@ -1052,6 +1052,14 @@ uint64_t InstrProfRecord::remapValue(uint64_t Value, uint32_t ValueKind,
   if (ValueKind == IPVK_VTableTarget)
     return SymTab->getVTableHashFromAddress(Value);
 
+  // For argument values: try to remap if it matches a known function address.
+  // Scalar integer values won't match and will pass through unchanged.
+  if (ValueKind == IPVK_ArgumentValue) {
+    uint64_t Hash = SymTab->getFunctionHashFromAddress(Value);
+    if (Hash != 0)
+      return Hash;
+  }
+
   return Value;
 }
 

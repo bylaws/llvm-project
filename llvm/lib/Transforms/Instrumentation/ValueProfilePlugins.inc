@@ -145,6 +145,19 @@ inline std::vector<CallBase *> findDirectCallSites(Function &F) {
   return CV.Calls;
 }
 
+inline bool isArgumentUsedAsCallTarget(Function *Callee, unsigned ArgNo) {
+  if (!Callee || Callee->isDeclaration() || ArgNo >= Callee->arg_size())
+    return false;
+  Argument *Arg = Callee->getArg(ArgNo);
+  for (Use &U : Arg->uses()) {
+    if (auto *CB = dyn_cast<CallBase>(U.getUser())) {
+      if (CB->isCallee(&U))
+        return true;
+    }
+  }
+  return false;
+}
+
 class ArgumentValueSpecializationPlugin {
   Function &F;
 
@@ -160,11 +173,16 @@ public:
       Instruction *InsertPt = I;
       Instruction *AnnotatedInst = I;
 
+      unsigned ArgIdx = 0;
       for (Value *V : I->args()) {
         Type *T = V->getType();
         if (T->isIntegerTy() || T->isFloatTy() || T->isDoubleTy()) {
           Candidates.emplace_back(CandidateInfo{V, InsertPt, AnnotatedInst});
+        } else if (T->isPointerTy() &&
+                   isArgumentUsedAsCallTarget(I->getCalledFunction(), ArgIdx)) {
+          Candidates.emplace_back(CandidateInfo{V, InsertPt, AnnotatedInst});
         }
+        ++ArgIdx;
       }
     }
   }

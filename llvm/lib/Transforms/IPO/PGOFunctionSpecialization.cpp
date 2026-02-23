@@ -94,6 +94,10 @@ static cl::opt<unsigned> MinLatencyThresh("pgofuncspec-min-latency-thresh",
 static cl::opt<unsigned> MaxSpecInlineSize("pgofuncspec-max-spec-inline-size",
                                            cl::init(10), cl::Hidden,
                                            cl::desc("TODO"));
+
+static cl::opt<unsigned> IndirectCallPenalty(
+    "pgofuncspec-indirect-call-penalty", cl::init(10), cl::Hidden,
+    cl::desc("Extra latency penalty for indirect calls in cost model"));
 std::pair<Function *, Function *>
 PGOFunctionSpecializer::cloneFunctionSpecialized(Function *F, Argument *Arg,
                                                  Constant *C, uint64_t V) {
@@ -227,6 +231,15 @@ PGOFunctionSpecializer::calculateFunctionSizeLatency(
 
         uint64_t InstLatency =
             LatencyCost.isValid() ? LatencyCost.getValue() : 1;
+
+        // Indirect calls are more expensive than direct calls (branch
+        // misprediction, no inlining opportunity). Add a penalty so that
+        // specializing a function pointer argument produces meaningful
+        // latency reduction.
+        if (auto *CB = dyn_cast<CallBase>(&I);
+            CB && !CB->getCalledFunction() && !isa<IntrinsicInst>(CB))
+          InstLatency += IndirectCallPenalty;
+
         TotalLatency += InstLatency * Weight;
       }
     }
@@ -241,12 +254,20 @@ PGOFunctionSpecializer::calculateFunctionSizeLatency(
 }
 
 PGOFunctionSpecializer::~PGOFunctionSpecializer() {
-  if (NumSpecsCreated > 0)
-    dbgs() << "PGOFnSpecialization: Created " << NumSpecsCreated
-           << " specializations in module " << M.getName() << "\n";
+  LLVM_DEBUG(if (NumSpecsCreated > 0) dbgs()
+             << "PGOFnSpecialization: Created " << NumSpecsCreated
+             << " specializations in module " << M.getName() << "\n");
 }
 
 bool PGOFunctionSpecializer::run() {
+  dbgs() << "PGOFnSpecialization: running on module " << M.getName() << "\n";
+
+  // Build the symbol table for mapping MD5 hashes back to Function* when
+  // specializing function pointer arguments.
+  if (Error E = Symtab.create(M)) {
+    consumeError(std::move(E));
+  }
+
   SmallVector<PGOSpec, 32> AllSpecs;
   unsigned NumCandidates = 0;
 
@@ -394,20 +415,10 @@ bool PGOFunctionSpecializer::run() {
     auto ArgNo = SpecsInfo.Specs[0].first->Arg.Formal->getArgNo();
     Value *ArgVar = CS->getArgOperand(ArgNo);
 
-    // Bitcast float/double to integer for switch
     Type *ArgType = ArgVar->getType();
+    bool IsPointerArg = ArgType->isPointerTy();
 
     auto *Term = BB->getTerminator();
-    IRBuilder<> IRB(Term);
-
-    Type *IntType = nullptr;
-    if (ArgType->isFloatTy() || ArgType->isDoubleTy()) {
-      IntType =
-          ArgType->isFloatTy() ? Type::getInt32Ty(Ctx) : Type::getInt64Ty(Ctx);
-      ArgVar = IRB.CreateBitCast(ArgVar, IntType);
-    }
-
-    SwitchInst *SI = IRB.CreateSwitch(ArgVar, DefaultBB, SpecsInfo.Specs.size());
 
     SmallVector<uint64_t, 16> CaseCounts;
     uint64_t DefaultCount = (TotalCount > SpecsInfo.TotalCount) ? TotalCount - SpecsInfo.TotalCount : 0;
@@ -430,16 +441,37 @@ bool PGOFunctionSpecializer::run() {
       PHI->addIncoming(CS, DefaultBB);
     }
 
-    dbgs() << "\n\n== Basic Block After==\n";
+    LLVM_DEBUG(dbgs() << "\n\n== Basic Block After==\n");
 
     std::vector<DominatorTree::UpdateType> Updates;
     Updates.reserve(2 * SpecsInfo.Specs.size());
 
+    // For pointer types, we use an icmp-eq + conditional branch chain instead
+    // of a switch, because function pointer addresses are not ConstantInt
+    // (they are link-time constants). For non-pointer types (int/float/double),
+    // we use the existing switch-based dispatch.
+    SwitchInst *SI = nullptr;
+    Type *IntType = nullptr;
+    if (!IsPointerArg) {
+      IRBuilder<> IRB(BB);
+      // Bitcast float/double to integer for switch
+      if (ArgType->isFloatTy() || ArgType->isDoubleTy()) {
+        IntType = ArgType->isFloatTy() ? Type::getInt32Ty(Ctx)
+                                       : Type::getInt64Ty(Ctx);
+        ArgVar = IRB.CreateBitCast(ArgVar, IntType);
+      }
+      SI = IRB.CreateSwitch(ArgVar, DefaultBB, SpecsInfo.Specs.size());
+    }
+
+    // For pointer dispatch, track the current comparison block.
+    BasicBlock *CurrentCheckBB = IsPointerArg ? BB : nullptr;
+
     unsigned CaseIdx = 0;
+    unsigned NumSpecs = SpecsInfo.Specs.size();
     for (auto &[SpecPtr, Count] : SpecsInfo.Specs) {
       Constant *SpecArgVal = SpecPtr->Arg.Actual;
       BasicBlock *CaseBB = BasicBlock::Create(
-          Ctx, Twine("CS.Case.") + Twine(CaseIdx++), Func, DefaultBB);
+          Ctx, Twine("CS.Case.") + Twine(CaseIdx), Func, DefaultBB);
       CallBase *NewCB = cast<CallBase>(CS->clone());
 
       Function *FuncToCall = SpecPtr->getSpecializedFunc();
@@ -454,31 +486,56 @@ bool PGOFunctionSpecializer::run() {
         IRBCase.CreateBr(MergeBB);
       }
 
-      // Convert constant to ConstantInt for switch case
-      Constant *CaseVal = SpecArgVal;
-      if (IntType) {
-        CaseVal = ConstantInt::get(IntType, cast<ConstantFP>(CaseVal)
-                                                ->getValue()
-                                                .bitcastToAPInt()
-                                                .getZExtValue());
+      if (IsPointerArg) {
+        // Pointer dispatch: emit icmp eq + conditional branch
+        bool IsLast = (CaseIdx == NumSpecs - 1);
+        BasicBlock *NextBB =
+            IsLast ? DefaultBB
+                   : BasicBlock::Create(Ctx,
+                                        Twine("CS.Check.") + Twine(CaseIdx + 1),
+                                        Func, DefaultBB);
+        IRBuilder<> IRBCheck(CurrentCheckBB);
+        Value *Cmp = IRBCheck.CreateICmpEQ(ArgVar, SpecArgVal);
+        IRBCheck.CreateCondBr(Cmp, CaseBB, NextBB);
+
+        Updates.push_back({DominatorTree::Insert, CurrentCheckBB, CaseBB});
+        if (!IsLast) {
+          Updates.push_back({DominatorTree::Insert, CurrentCheckBB, NextBB});
+          CurrentCheckBB = NextBB;
+        } else {
+          Updates.push_back({DominatorTree::Insert, CurrentCheckBB, DefaultBB});
+        }
+      } else {
+        // Switch-based dispatch: convert constant and add switch case
+        Constant *CaseVal = SpecArgVal;
+        if (IntType) {
+          CaseVal = ConstantInt::get(IntType, cast<ConstantFP>(CaseVal)
+                                                  ->getValue()
+                                                  .bitcastToAPInt()
+                                                  .getZExtValue());
+        }
+        SI->addCase(cast<ConstantInt>(CaseVal), CaseBB);
+        Updates.push_back({DominatorTree::Insert, BB, CaseBB});
       }
-      SI->addCase(cast<ConstantInt>(CaseVal), CaseBB);
+
       if (!CSTy->isVoidTy())
         PHI->addIncoming(NewCB, CaseBB);
 
       Updates.push_back({DominatorTree::Insert, CaseBB, MergeBB});
-      Updates.push_back({DominatorTree::Insert, BB, CaseBB});
 
       MaxCount = std::max(MaxCount, Count);
       CaseCounts.push_back(Count);
 
       LLVM_DEBUG(dbgs() << *CaseBB << "\n");
+      CaseIdx++;
     }
 
     DTU.applyUpdates(Updates);
 
-    // Will be used to regenerate BFI appropriately, safe as this pass invalidates it
-    setProfMetadata(Func->getParent(), SI, CaseCounts, MaxCount);
+    // Set branch weight metadata for profile-guided optimization.
+    if (SI) {
+      setProfMetadata(Func->getParent(), SI, CaseCounts, MaxCount);
+    }
   }
 
   // Clean up analysis clones that were only used for cost analysis
@@ -498,7 +555,8 @@ bool PGOFunctionSpecializer::run() {
   return !CallSiteSpecs.empty();
 }
 
-static Constant *synthesizeConstant(Type *T, uint64_t V) {
+static Constant *synthesizeConstant(Type *T, uint64_t V,
+                                    InstrProfSymtab *Symtab = nullptr) {
   LLVM_DEBUG(dbgs() << *T << '\n');
   if (T->isIntegerTy()) {
     return llvm::ConstantInt::get(T, V);
@@ -508,6 +566,13 @@ static Constant *synthesizeConstant(Type *T, uint64_t V) {
   } else if (T->isDoubleTy()) {
     double D = llvm::bit_cast<double>(V);
     return llvm::ConstantFP::get(T->getContext(), llvm::APFloat(D));
+  } else if (T->isPointerTy() && Symtab) {
+    // V is the MD5 hash of the target function name (remapped during profile
+    // merge). Look up the Function* via the symtab.
+    Function *Target = Symtab->getFunction(V);
+    if (Target && !Target->isDeclaration())
+      return Target;
+    return nullptr;
   } else {
     return nullptr;
   }
@@ -562,6 +627,18 @@ static void untagBlocks(FunctionCallee &BlockTag) {
   }
 }
 
+/// Check if a function argument is used as the callee of an indirect call.
+/// Must mirror the logic in ArgumentValueSpecializationPlugin.
+static bool isArgUsedAsCallTarget(Argument *Arg) {
+  for (Use &U : Arg->uses()) {
+    if (auto *CB = dyn_cast<CallBase>(U.getUser())) {
+      if (CB->isCallee(&U))
+        return true;
+    }
+  }
+  return false;
+}
+
 bool PGOFunctionSpecializer::findSpecializations(
     Function *F, unsigned FuncSize, SmallVectorImpl<PGOSpec> &AllSpecs,
     FunctionCallee &BlockTag) {
@@ -574,6 +651,8 @@ bool PGOFunctionSpecializer::findSpecializations(
     Type *T = Arg.getType();
 
     if (T->isIntegerTy() || T->isFloatTy() || T->isDoubleTy())
+      Args.push_back({&Arg, VPArgIdx++});
+    else if (T->isPointerTy() && isArgUsedAsCallTarget(&Arg))
       Args.push_back({&Arg, VPArgIdx++});
   }
 
@@ -624,7 +703,8 @@ bool PGOFunctionSpecializer::findSpecializations(
         if (ValProp < AnalysisCutoffThresh)
           continue;
 
-        Constant *C = synthesizeConstant(A->getType(), ProfiledValue.Value);
+        Constant *C = synthesizeConstant(A->getType(), ProfiledValue.Value,
+                                                &Symtab);
         if (!C) {
           continue;
         }

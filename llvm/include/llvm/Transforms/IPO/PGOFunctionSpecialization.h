@@ -15,6 +15,7 @@
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/IR/InstVisitor.h"
 #include "llvm/IR/PassManager.h"
+#include "llvm/ProfileData/InstrProf.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Transforms/Scalar/SCCP.h"
 #include "llvm/Transforms/Utils/Cloning.h"
@@ -59,6 +60,7 @@ class PGOFunctionSpecializer {
   std::function<AssumptionCache &(Function &)> GetAC;
   std::function<DominatorTree &(Function &)> GetDT;
   int OptLevel;
+  InstrProfSymtab Symtab;
 
   DenseMap<Function *, CodeMetrics> FunctionMetrics;
 
