@@ -30,10 +30,12 @@
 #include "llvm/Transforms/InstCombine/InstCombine.h"
 #include "llvm/Transforms/Scalar/ADCE.h"
 #include "llvm/Transforms/Scalar/EarlyCSE.h"
+#include "llvm/Transforms/Scalar/GVN.h"
 #include "llvm/Transforms/Scalar/IndVarSimplify.h"
 #include "llvm/Transforms/Scalar/LoopDeletion.h"
 #include "llvm/Transforms/Scalar/LoopFlatten.h"
 #include "llvm/Transforms/Scalar/LoopIdiomRecognize.h"
+#include "llvm/Transforms/Scalar/LICM.h"
 #include "llvm/Transforms/Scalar/LoopInstSimplify.h"
 #include "llvm/Transforms/Scalar/LoopRotation.h"
 #include "llvm/Transforms/Scalar/LoopSimplifyCFG.h"
@@ -67,7 +69,7 @@ static cl::opt<unsigned> MinFunctionSize(
              "instructions"));
 
 static cl::opt<unsigned>
-    AnalysisCutoffThresh("pgofuncspec-analysis-cutoff-thresh", cl::init(50),
+    AnalysisCutoffThresh("pgofuncspec-analysis-cutoff-thresh", cl::init(30),
                          cl::Hidden, cl::desc("TODO"));
 
 static cl::opt<unsigned>
@@ -77,10 +79,11 @@ static cl::opt<unsigned>
 static cl::opt<unsigned> DispatchCost("pgofuncspec-dispatch-cost", cl::init(7),
                                       cl::Hidden, cl::desc("TODO"));
 
-static cl::opt<unsigned> HotFuncThresh("pgofuncspec-hot-func-thresh",
-                                       cl::init(3500), cl::Hidden,
-                                       cl::desc("TODO"));
-static cl::opt<unsigned> BlowupFactor("pgofuncspec-blowup-factor", cl::init(300),
+static cl::opt<unsigned> HotFuncPercentile(
+    "pgofuncspec-hot-func-percentile", cl::init(990000), cl::Hidden,
+    cl::desc("Percentile cutoff for hot call sites (encoded as cutoff*10000, "
+             "800000 = top 20%)"));
+static cl::opt<unsigned> BlowupFactor("pgofuncspec-blowup-factor", cl::init(30),
                                       cl::Hidden, cl::desc("TODO"));
 
 static cl::opt<unsigned> MaxSpecSize("pgofuncspec-max-spec-size",
@@ -94,6 +97,36 @@ static cl::opt<unsigned> MinLatencyThresh("pgofuncspec-min-latency-thresh",
 static cl::opt<unsigned> MaxSpecInlineSize("pgofuncspec-max-spec-inline-size",
                                            cl::init(10), cl::Hidden,
                                            cl::desc("TODO"));
+
+/// Check if a callee's formal parameter is used for virtual dispatch.
+/// Must be kept in sync with the same function in ValueProfilePlugins.inc.
+static bool isArgUsedForVirtualDispatch(const Argument *Arg) {
+  for (const User *U : Arg->users()) {
+    const auto *LI = dyn_cast<LoadInst>(U);
+    if (!LI)
+      continue;
+    for (const User *VU : LI->users()) {
+      const Value *MaybeGEP = VU;
+      if (auto *GEP = dyn_cast<GetElementPtrInst>(VU))
+        MaybeGEP = GEP;
+      for (const User *GU : MaybeGEP->users()) {
+        if (const auto *FnLoad = dyn_cast<LoadInst>(GU)) {
+          for (const User *FU : FnLoad->users()) {
+            if (const auto *CB = dyn_cast<CallBase>(FU)) {
+              if (CB->isIndirectCall() && CB->getCalledOperand() == FnLoad)
+                return true;
+            }
+          }
+        }
+        if (const auto *CB = dyn_cast<CallBase>(GU)) {
+          if (CB->isIndirectCall() && CB->getCalledOperand() == VU)
+            return true;
+        }
+      }
+    }
+  }
+  return false;
+}
 std::pair<Function *, Function *>
 PGOFunctionSpecializer::cloneFunctionSpecialized(Function *F, Argument *Arg,
                                                  Constant *C, uint64_t V) {
@@ -131,7 +164,11 @@ PGOFunctionSpecializer::cloneFunctionSpecialized(Function *F, Argument *Arg,
   LoopPassManager LPM1, LPM2;
   LPM1.addPass(LoopInstSimplifyPass());
   LPM1.addPass(LoopSimplifyCFGPass());
+  LPM1.addPass(LICMPass(/*MssaOptCap=*/100, /*MssaNoAccForPromotionCap=*/250,
+                         /*AllowSpeculation=*/false));
   LPM1.addPass(LoopRotatePass(true, false));
+  LPM1.addPass(LICMPass(/*MssaOptCap=*/100, /*MssaNoAccForPromotionCap=*/250,
+                         /*AllowSpeculation=*/true));
   LPM1.addPass(SimpleLoopUnswitchPass());
   LPM1.addPass(LoopSimplifyCFGPass());
   LPM2.addPass(LoopIdiomRecognizePass());
@@ -139,7 +176,7 @@ PGOFunctionSpecializer::cloneFunctionSpecialized(Function *F, Argument *Arg,
   LPM2.addPass(LoopDeletionPass());
   LPM2.addPass(LoopFullUnrollPass(OptLevel, false, false));
   FPM.addPass(createFunctionToLoopPassAdaptor(std::move(LPM1),
-                                              /*UseMemorySSA=*/false,
+                                              /*UseMemorySSA=*/true,
                                               /*UseBlockFrequencyInfo=*/false));
   FPM.addPass(
       SimplifyCFGPass(SimplifyCFGOptions().convertSwitchRangeToICmp(true)));
@@ -148,6 +185,7 @@ PGOFunctionSpecializer::cloneFunctionSpecialized(Function *F, Argument *Arg,
                                               /*UseMemorySSA=*/false,
                                               /*UseBlockFrequencyInfo=*/false));
 
+  FPM.addPass(GVNPass());
   FPM.addPass(SCCPPass());
   FPM.addPass(InstCombinePass());
   FPM.addPass(ADCEPass());
@@ -326,6 +364,16 @@ bool PGOFunctionSpecializer::run() {
              << ", code size: "
              << ore::NV("SpecializedCodeSize", S.SpecializedCodeSize) << ")";
     });
+    dbgs() << "PGOFnSpecialization: Function " << S.F->getName()
+                      << " , OriginalLatency " << S.OriginalLatency
+                      << " , SpecializedLatency " << S.SpecializedLatency
+                      << " , Count " << S.Count << " , SpecializedCodeSize "
+                      << S.SpecializedCodeSize << " , MinValueProp "
+                      << S.MinValueProp << "\n";
+               dbgs() << "PGOFnSpecialization:   FormalArg = "
+                      << S.Arg.Formal->getNameOrAsOperand()
+                      << ", ActualArg = " << S.Arg.Actual->getNameOrAsOperand()
+                      << "\n";
   }
 
   struct CallSiteSpecsItem {
@@ -571,10 +619,16 @@ bool PGOFunctionSpecializer::findSpecializations(
   uint32_t VPArgIdx = 0;
   for (Argument &Arg : F->args()) {
     // Must be kept in sync with the argument value profiling plugin.
+    // The plugin profiles int/float/double args and also pointer args used
+    // for virtual dispatch. We only handle scalar types here; pointer args
+    // used for virtual dispatch still increment the index.
     Type *T = Arg.getType();
 
     if (T->isIntegerTy() || T->isFloatTy() || T->isDoubleTy())
       Args.push_back({&Arg, VPArgIdx++});
+    else if (T->isPointerTy() && Arg.hasNonNullAttr() &&
+             isArgUsedForVirtualDispatch(&Arg))
+      VPArgIdx++; // Skip but count — profiled by vtable specialization pass
   }
 
   if (Args.empty()) {
@@ -601,7 +655,7 @@ bool PGOFunctionSpecializer::findSpecializations(
 
       uint64_t TotalCount;
       auto ValueProfData = getValueProfDataFromInst(CS, IPVK_ArgumentValue, 5,
-                                                 TotalCount, false, VPIdx);
+                                                    TotalCount, false, VPIdx);
       auto &BFI = GetBFI(*F);
       auto BBEdgeCount = BFI.getBlockProfileCount(CS.getParent());
       LLVM_DEBUG(dbgs() << "TotalCount " << TotalCount << " , BBEdgeCount "
@@ -611,7 +665,7 @@ bool PGOFunctionSpecializer::findSpecializations(
         // accurate as value profile counts will miss rare value counts.
         TotalCount = std::max(TotalCount, *BBEdgeCount);
       }
-      if (TotalCount < HotFuncThresh)
+      if (!PSI->isHotCountNthPercentile(HotFuncPercentile, TotalCount))
         continue;
 
       for (const auto &ProfiledValue : ValueProfData) {
@@ -794,8 +848,10 @@ PGOFunctionSpecializationPass::run(Module &M, ModuleAnalysisManager &AM) {
     return FAM.getResult<BlockFrequencyAnalysis>(F);
   };
 
-  PGOFunctionSpecializer Specializer(M, &FAM, GetBFI, GetTLI, GetTTI, GetAC,
-                                     GetDT, OptLevel);
+  auto &PSI = AM.getResult<ProfileSummaryAnalysis>(M);
+
+  PGOFunctionSpecializer Specializer(M, &FAM, &PSI, GetBFI, GetTLI, GetTTI,
+                                     GetAC, GetDT, OptLevel);
 
   bool Changed = Specializer.run();
 

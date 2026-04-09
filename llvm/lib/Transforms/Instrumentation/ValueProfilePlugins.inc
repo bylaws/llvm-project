@@ -145,6 +145,47 @@ inline std::vector<CallBase *> findDirectCallSites(Function &F) {
   return CV.Calls;
 }
 
+/// Check if a callee's formal parameter is used for virtual dispatch.
+/// Returns true if the argument has a load (vptr load) whose result feeds
+/// into indirect calls through the vtable pattern.
+static bool isArgUsedForVirtualDispatch(const Argument *Arg) {
+  // Look for: load from the argument (vptr load) -> GEP/bitcast ->
+  //           load (function pointer) -> indirect call
+  for (const User *U : Arg->users()) {
+    const auto *LI = dyn_cast<LoadInst>(U);
+    if (!LI)
+      continue;
+    // This load from the argument could be the vptr load.
+    // Check if the loaded value is used in an indirect call pattern.
+    for (const User *VU : LI->users()) {
+      // The vptr is used in a GEP to index into the vtable, or
+      // directly as a function pointer load base.
+      const Value *MaybeGEP = VU;
+      if (auto *GEP = dyn_cast<GetElementPtrInst>(VU))
+        MaybeGEP = GEP;
+
+      for (const User *GU : MaybeGEP->users()) {
+        if (const auto *FnLoad = dyn_cast<LoadInst>(GU)) {
+          for (const User *FU : FnLoad->users()) {
+            if (const auto *CB = dyn_cast<CallBase>(FU)) {
+              if (CB->isIndirectCall() &&
+                  CB->getCalledOperand() == FnLoad)
+                return true;
+            }
+          }
+        }
+        // Also handle the case where the load result IS the called operand
+        // (single level of indirection).
+        if (const auto *CB = dyn_cast<CallBase>(GU)) {
+          if (CB->isIndirectCall() && CB->getCalledOperand() == VU)
+            return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
 class ArgumentValueSpecializationPlugin {
   Function &F;
 
@@ -156,14 +197,36 @@ public:
   void run(std::vector<CandidateInfo> &Candidates) {
     std::vector<CallBase *> Result = findDirectCallSites(F);
 
-    for (CallBase *I : Result) {
-      Instruction *InsertPt = I;
-      Instruction *AnnotatedInst = I;
+    for (CallBase *CB : Result) {
+      Instruction *InsertPt = CB;
+      Instruction *AnnotatedInst = CB;
 
-      for (Value *V : I->args()) {
+      Function *Callee = CB->getCalledFunction();
+
+      for (unsigned ArgIdx = 0; ArgIdx < CB->arg_size(); ++ArgIdx) {
+        Value *V = CB->getArgOperand(ArgIdx);
         Type *T = V->getType();
         if (T->isIntegerTy() || T->isFloatTy() || T->isDoubleTy()) {
           Candidates.emplace_back(CandidateInfo{V, InsertPt, AnnotatedInst});
+        } else if (T->isPointerTy() && Callee && !Callee->isDeclaration() &&
+                   ArgIdx < Callee->arg_size()) {
+          // For pointer arguments that are nonnull and used for virtual
+          // dispatch in the callee, load the vptr and profile it — same
+          // approach as VTableProfilingPlugin. Check the callee's formal
+          // parameter (not call-site attrs) so VPArgIdx is consistent
+          // across all callers.
+          const Argument *FormalArg = Callee->getArg(ArgIdx);
+          if (!FormalArg->hasNonNullAttr())
+            continue;
+
+          if (!isArgUsedForVirtualDispatch(FormalArg))
+            continue;
+
+          auto *VPtrLoad = new LoadInst(
+              PointerType::getUnqual(F.getContext()), V, "vptr.arg.prof",
+              CB->getIterator());
+          Candidates.emplace_back(
+              CandidateInfo{VPtrLoad, InsertPt, AnnotatedInst});
         }
       }
     }

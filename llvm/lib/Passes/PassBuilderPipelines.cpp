@@ -73,6 +73,7 @@
 #include "llvm/Transforms/IPO/SampleProfileProbe.h"
 #include "llvm/Transforms/IPO/WholeProgramDevirt.h"
 #include "llvm/Transforms/IPO/PGOFunctionSpecialization.h"
+#include "llvm/Transforms/IPO/PGOVTableFunctionSpecialization.h"
 #include "llvm/Transforms/InstCombine/InstCombine.h"
 #include "llvm/Transforms/Instrumentation/CGProfile.h"
 #include "llvm/Transforms/Instrumentation/ControlHeightReduction.h"
@@ -1101,8 +1102,10 @@ PassBuilder::buildModuleSimplificationPipeline(OptimizationLevel Level,
   // command line. E.g. for flattened profiles where we will not be reloading
   // the sample profile in the ThinLTO backend, we ideally shouldn't have to
   // provide the sample profile file.
-  if (Phase == ThinOrFullLTOPhase::ThinLTOPostLink && !LoadSampleProfile)
+  if (Phase == ThinOrFullLTOPhase::ThinLTOPostLink && !LoadSampleProfile) {
+    MPM.addPass(PGOVTableFunctionSpecializationPass());
     MPM.addPass(PGOIndirectCallPromotion(true /* InLTO */, HasSampleProfile));
+  }
 
   // Create an early function pass manager to cleanup the output of the
   // frontend. Not necessary with LTO post link pipelines since the pre link
@@ -1264,8 +1267,10 @@ PassBuilder::buildModuleSimplificationPipeline(OptimizationLevel Level,
         /* ProfileRemappingFile */ "", IntrusiveRefCntPtr<vfs::FileSystem>());
   }
 
-  if (IsPGOInstrGen || IsPGOInstrUse || IsCtxProfGen)
+  if (IsPGOInstrGen || IsPGOInstrUse || IsCtxProfGen) {
+    MPM.addPass(PGOVTableFunctionSpecializationPass());
     MPM.addPass(PGOIndirectCallPromotion(false, false));
+  }
 
   if (IsPGOPreLink && PGOOpt->CSAction == PGOOptions::CSIRInstr)
     MPM.addPass(PGOInstrumentationGenCreateVar(PGOOpt->CSProfileGenFile,
@@ -1285,10 +1290,8 @@ PassBuilder::buildModuleSimplificationPipeline(OptimizationLevel Level,
   else
     MPM.addPass(buildInlinerPipeline(Level, Phase));
 
-  if (PGOOpt) {
     MPM.addPass(PGOFunctionSpecializationPass(Level.getSpeedupLevel()));
     MPM.addPass(AlwaysInlinerPass(/*InsertLifetimeIntrinsics=*/true));
-  }
 
   // Remove any dead arguments exposed by cleanups, constant folding globals,
   // and argument promotion.
@@ -1920,6 +1923,7 @@ PassBuilder::buildLTODefaultPipeline(OptimizationLevel Level,
     // left by the earlier promotion pass that promotes intra-module targets.
     // This two-step promotion is to save the compile time. For LTO, it should
     // produce the same result as if we only do promotion here.
+    MPM.addPass(PGOVTableFunctionSpecializationPass());
     MPM.addPass(PGOIndirectCallPromotion(
         true /* InLTO */, PGOOpt && PGOOpt->Action == PGOOptions::SampleUse));
 
@@ -2033,6 +2037,9 @@ PassBuilder::buildLTODefaultPipeline(OptimizationLevel Level,
     MPM.addPass(MemProfContextDisambiguation(
         /*Summary=*/nullptr,
         PGOOpt && PGOOpt->Action == PGOOptions::SampleUse));
+
+  MPM.addPass(PGOFunctionSpecializationPass(Level.getSpeedupLevel()));
+  MPM.addPass(AlwaysInlinerPass(/*InsertLifetimeIntrinsics=*/true));
 
   // Optimize globals again after we ran the inliner.
   MPM.addPass(GlobalOptPass());

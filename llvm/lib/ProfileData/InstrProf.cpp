@@ -1052,6 +1052,16 @@ uint64_t InstrProfRecord::remapValue(uint64_t Value, uint32_t ValueKind,
   if (ValueKind == IPVK_VTableTarget)
     return SymTab->getVTableHashFromAddress(Value);
 
+  // For argument values, some entries may be vtable pointers (profiled via
+  // vptr loads at call sites). Try vtable address resolution; if the value
+  // falls in a known vtable range, resolve it to the MD5 hash. Otherwise
+  // keep the raw value (for int/float/double argument values).
+  if (ValueKind == IPVK_ArgumentValue) {
+    uint64_t Resolved = SymTab->getVTableHashFromAddress(Value);
+    if (Resolved != 0)
+      return Resolved;
+  }
+
   return Value;
 }
 

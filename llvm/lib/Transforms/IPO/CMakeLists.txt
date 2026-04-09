@@ -20,6 +20,7 @@ add_llvm_component_library(LLVMipo
   FunctionImport.cpp
   FunctionSpecialization.cpp
   PGOFunctionSpecialization.cpp
+  PGOVTableFunctionSpecialization.cpp
   GlobalDCE.cpp
   GlobalOpt.cpp
   GlobalSplit.cpp

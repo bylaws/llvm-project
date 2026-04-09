@@ -12,6 +12,7 @@
 #include "llvm/Analysis/BlockFrequencyInfo.h"
 #include "llvm/Analysis/CodeMetrics.h"
 #include "llvm/Analysis/InlineCost.h"
+#include "llvm/Analysis/ProfileSummaryInfo.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/IR/InstVisitor.h"
 #include "llvm/IR/PassManager.h"
@@ -53,6 +54,7 @@ struct PGOSpec {
 class PGOFunctionSpecializer {
   Module &M;
   FunctionAnalysisManager *FAM;
+  ProfileSummaryInfo *PSI;
   std::function<BlockFrequencyInfo &(Function &)> GetBFI;
   std::function<const TargetLibraryInfo &(Function &)> GetTLI;
   std::function<TargetTransformInfo &(Function &)> GetTTI;
@@ -64,14 +66,14 @@ class PGOFunctionSpecializer {
 
 public:
   PGOFunctionSpecializer(
-      Module &M, FunctionAnalysisManager *FAM,
+      Module &M, FunctionAnalysisManager *FAM, ProfileSummaryInfo *PSI,
       std::function<BlockFrequencyInfo &(Function &)> GetBFI,
       std::function<const TargetLibraryInfo &(Function &)> GetTLI,
       std::function<TargetTransformInfo &(Function &)> GetTTI,
       std::function<AssumptionCache &(Function &)> GetAC,
       std::function<DominatorTree &(Function &)> GetDT, int OptLevel)
-      : M(M), FAM(FAM), GetBFI(GetBFI), GetTLI(GetTLI), GetTTI(GetTTI),
-        GetAC(GetAC), GetDT(GetDT), OptLevel(OptLevel) {}
+      : M(M), FAM(FAM), PSI(PSI), GetBFI(GetBFI), GetTLI(GetTLI),
+        GetTTI(GetTTI), GetAC(GetAC), GetDT(GetDT), OptLevel(OptLevel) {}
 
   LLVM_ABI ~PGOFunctionSpecializer();
 
