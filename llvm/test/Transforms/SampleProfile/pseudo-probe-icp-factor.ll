@@ -257,4 +257,4 @@ attributes #3 = { nocallback nofree nosync nounwind willreturn memory(inaccessib
 
 ;; The remaining count of the second target (bar) should be from the original count multiplied by two callsite
 ;; factors, i.e, roughly 11259 * 0.95 * 0.79 = 8444.
-; CHECK: ![[#PROF]] = !{!"VP", i32 0, i64 8444, i64 7546896869197086323, i64 -1, i64 -2012135647395072713, i64 8444}
+; CHECK: ![[#PROF]] = !{!"VP", i32 0, i64 8444, i32 2, i64 7546896869197086323, i64 -1, i64 -2012135647395072713, i64 8444}

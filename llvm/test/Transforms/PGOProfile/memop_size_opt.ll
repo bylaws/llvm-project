@@ -144,7 +144,7 @@ for.end6:
 ; MEMOP_OPT: [[SWITCH_BW]] = !{!"branch_weights", i32 457, i32 99}
 ; Should be 457 total left (original total count 556, minus 99 from specialized
 ; value 0, which is removed from VP array. This should preserve all unpromoted values.
-; MEMOP_OPT: [[NEWVP]] = !{!"VP", i32 1, i64 457, i64 2, i64 88, i64 3, i64 77, i64 9, i64 72, i64 4, i64 66, i64 5, i64 55, i64 6, i64 44, i64 7, i64 33, i64 8, i64 22}
+; MEMOP_OPT: [[NEWVP]] = !{!"VP", i32 1, i64 457, i32 8, i64 2, i64 88, i64 3, i64 77, i64 9, i64 72, i64 4, i64 66, i64 5, i64 55, i64 6, i64 44, i64 7, i64 33, i64 8, i64 22}
 
 !llvm.module.flags = !{!0}
 
@@ -178,8 +178,8 @@ for.end6:
 !27 = !{!"function_entry_count", i64 1}
 !28 = !{!"branch_weights", i32 20, i32 1}
 !29 = !{!"branch_weights", i32 556, i32 20}
-!30 = !{!"VP", i32 1, i64 556, i64 0, i64 99, i64 2, i64 88, i64 3, i64 77, i64 9, i64 72, i64 4, i64 66, i64 5, i64 55, i64 6, i64 44, i64 7, i64 33, i64 8, i64 22}
-!31 = !{!"VP", i32 1, i64 556, i64 0, i64 99, i64 2, i64 88, i64 3, i64 77, i64 9, i64 72, i64 4, i64 66, i64 5, i64 55, i64 6, i64 44, i64 7, i64 33, i64 8, i64 22}
+!30 = !{!"VP", i32 1, i64 556, i32 9, i64 0, i64 99, i64 2, i64 88, i64 3, i64 77, i64 9, i64 72, i64 4, i64 66, i64 5, i64 55, i64 6, i64 44, i64 7, i64 33, i64 8, i64 22}
+!31 = !{!"VP", i32 1, i64 556, i32 9, i64 0, i64 99, i64 2, i64 88, i64 3, i64 77, i64 9, i64 72, i64 4, i64 66, i64 5, i64 55, i64 6, i64 44, i64 7, i64 33, i64 8, i64 22}
 
 declare void @llvm.lifetime.start(i64, ptr nocapture)
 

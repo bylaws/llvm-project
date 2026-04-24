@@ -57,10 +57,10 @@ ret:
 !15 = !{!"function_entry_count", i64 1000}
 !16 = !{!"branch_weights", i64 1000}
 !17 = !{!"function_entry_count", i32 1500}
-!18 = !{!"VP", i32 0, i64 1500, i64 123, i64 900, i64 456, i64 600}
+!18 = !{!"VP", i32 0, i64 1500, i32 2, i64 123, i64 900, i64 456, i64 600}
 !19 = !{!"branch_weights", i32 1500}
 !20 = !{!"branch_weights", i32 1234, i32 5678}
-!21 = !{!"VP", i32 2, i64 1500, i64 789, i64 900, i64 321, i64 600}
+!21 = !{!"VP", i32 2, i64 1500, i32 2, i64 789, i64 900, i64 321, i64 600}
 
 ; CHECK-LABEL: define void @caller(
 ; CHECK-SAME: ptr [[FUNC:%.*]]) personality ptr @__gxx_personality_v0 !prof [[PROF14:![0-9]+]] {
@@ -90,11 +90,11 @@ ret:
 ; CHECK-NEXT:            to label %[[RET:.*]] unwind label %[[LPAD]], !prof [[PROF18]]
 
 ; CHECK: [[PROF14]] = !{!"function_entry_count", i64 1000}
-; CHECK: [[PROF15]] = !{!"VP", i32 2, i64 1000, i64 789, i64 600, i64 321, i64 400}
-; CHECK: [[PROF16]] = !{!"VP", i32 0, i64 1000, i64 123, i64 600, i64 456, i64 400}
+; CHECK: [[PROF15]] = !{!"VP", i32 2, i64 1000, i32 2, i64 789, i64 600, i64 321, i64 400}
+; CHECK: [[PROF16]] = !{!"VP", i32 0, i64 1000, i32 2, i64 123, i64 600, i64 456, i64 400}
 ; CHECK: [[PROF17]] = !{!"branch_weights", i32 1000}
 ; CHECK: [[PROF18]] = !{!"branch_weights", i32 1234, i32 5678}
 ; CHECK: [[PROF19]] = !{!"function_entry_count", i64 500}
-; CHECK: [[PROF20]] = !{!"VP", i32 2, i64 500, i64 789, i64 300, i64 321, i64 200}
-; CHECK: [[PROF21]] = !{!"VP", i32 0, i64 500, i64 123, i64 300, i64 456, i64 200}
+; CHECK: [[PROF20]] = !{!"VP", i32 2, i64 500, i32 2, i64 789, i64 300, i64 321, i64 200}
+; CHECK: [[PROF21]] = !{!"VP", i32 0, i64 500, i32 2, i64 123, i64 300, i64 456, i64 200}
 ; CHECK: [[PROF22]] = !{!"branch_weights", i32 500}

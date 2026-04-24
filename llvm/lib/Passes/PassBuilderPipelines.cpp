@@ -329,6 +329,8 @@ namespace llvm {
 extern cl::opt<unsigned> MaxDevirtIterations;
 } // namespace llvm
 
+extern cl::opt<bool> PGOFuncSpecPostInliner;
+
 void PassBuilder::invokePeepholeEPCallbacks(FunctionPassManager &FPM,
                                             OptimizationLevel Level) {
   for (auto &C : PeepholeEPCallbacks)
@@ -1268,7 +1270,8 @@ PassBuilder::buildModuleSimplificationPipeline(OptimizationLevel Level,
   }
 
   if (IsPGOInstrGen || IsPGOInstrUse || IsCtxProfGen) {
-    MPM.addPass(PGOVTableFunctionSpecializationPass());
+    if (Phase == ThinOrFullLTOPhase::None)
+      MPM.addPass(PGOVTableFunctionSpecializationPass());
     MPM.addPass(PGOIndirectCallPromotion(false, false));
   }
 
@@ -1284,14 +1287,19 @@ PassBuilder::buildModuleSimplificationPipeline(OptimizationLevel Level,
     MPM.addPass(PGOForceFunctionAttrsPass(PGOOpt->ColdOptType));
 
 
+  if (!PGOFuncSpecPostInliner)
+    MPM.addPass(PGOFunctionSpecializationPass(Level.getSpeedupLevel(), Phase));
+
   MPM.addPass(AlwaysInlinerPass(/*InsertLifetimeIntrinsics=*/true));
   if (EnableModuleInliner)
     MPM.addPass(buildModuleInlinerPipeline(Level, Phase));
   else
     MPM.addPass(buildInlinerPipeline(Level, Phase));
 
-    MPM.addPass(PGOFunctionSpecializationPass(Level.getSpeedupLevel()));
     MPM.addPass(AlwaysInlinerPass(/*InsertLifetimeIntrinsics=*/true));
+
+  if (PGOFuncSpecPostInliner)
+    MPM.addPass(PGOFunctionSpecializationPass(Level.getSpeedupLevel(), Phase));
 
   // Remove any dead arguments exposed by cleanups, constant folding globals,
   // and argument promotion.
@@ -1923,6 +1931,8 @@ PassBuilder::buildLTODefaultPipeline(OptimizationLevel Level,
     // left by the earlier promotion pass that promotes intra-module targets.
     // This two-step promotion is to save the compile time. For LTO, it should
     // produce the same result as if we only do promotion here.
+    MPM.addPass(PGOFunctionSpecializationPass(Level.getSpeedupLevel(),
+        ThinOrFullLTOPhase::FullLTOPostLink));
     MPM.addPass(PGOVTableFunctionSpecializationPass());
     MPM.addPass(PGOIndirectCallPromotion(
         true /* InLTO */, PGOOpt && PGOOpt->Action == PGOOptions::SampleUse));
@@ -2030,6 +2040,8 @@ PassBuilder::buildLTODefaultPipeline(OptimizationLevel Level,
                       InlinePass::CGSCCInliner}));
   }
 
+  MPM.addPass(AlwaysInlinerPass(/*InsertLifetimeIntrinsics=*/true));
+
   // Perform context disambiguation after inlining, since that would reduce the
   // amount of additional cloning required to distinguish the allocation
   // contexts.
@@ -2037,9 +2049,6 @@ PassBuilder::buildLTODefaultPipeline(OptimizationLevel Level,
     MPM.addPass(MemProfContextDisambiguation(
         /*Summary=*/nullptr,
         PGOOpt && PGOOpt->Action == PGOOptions::SampleUse));
-
-  MPM.addPass(PGOFunctionSpecializationPass(Level.getSpeedupLevel()));
-  MPM.addPass(AlwaysInlinerPass(/*InsertLifetimeIntrinsics=*/true));
 
   // Optimize globals again after we ran the inliner.
   MPM.addPass(GlobalOptPass());

@@ -29,7 +29,7 @@ entry:
 ; It should skip range values 9, 17, 33, 65, 129 and promote (up to) three values, 0,
 ; 1, 2 (not 3), and preserve all unpromoted values in the new VP metadata.
 ; CHECK: [[SWITCH_BW]] = !{!"branch_weights", i32 524, i32 101, i32 101, i32 101}
-; CHECK: [[NEWVP]] = !{!"VP", i32 1, i64 524, i64 9, i64 104, i64 17, i64 103, i64 33, i64 103, i64 65, i64 102, i64 129, i64 102, i64 3, i64 101}
+; CHECK: [[NEWVP]] = !{!"VP", i32 1, i64 524, i32 6, i64 9, i64 104, i64 17, i64 103, i64 33, i64 103, i64 65, i64 102, i64 129, i64 102, i64 3, i64 101}
 
 declare void @llvm.memcpy.p0.p0.i64(ptr nocapture writeonly, ptr nocapture readonly, i64, i1)
 
@@ -63,4 +63,4 @@ declare void @llvm.memcpy.p0.p0.i64(ptr nocapture writeonly, ptr nocapture reado
 !25 = !{i32 999990, i64 1, i32 5}
 !26 = !{i32 999999, i64 1, i32 5}
 !27 = !{!"function_entry_count", i64 827}
-!28 = !{!"VP", i32 1, i64 827, i64 9, i64 104, i64 17, i64 103, i64 33, i64 103, i64 65, i64 102, i64 129, i64 102, i64 0, i64 101, i64 1, i64 101, i64 2, i64 101, i64 3, i64 101}
+!28 = !{!"VP", i32 1, i64 827, i32 9, i64 9, i64 104, i64 17, i64 103, i64 33, i64 103, i64 65, i64 102, i64 129, i64 102, i64 0, i64 101, i64 1, i64 101, i64 2, i64 101, i64 3, i64 101}

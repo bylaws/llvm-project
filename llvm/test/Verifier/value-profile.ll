@@ -11,14 +11,14 @@ define void @test(ptr %0) {
   call void %0(), !prof !0
   ret void
 }
-!0 = !{!"VP", i32 0, i32 20, i64 1234, i64 10, i64 5678, i64 5}
+!0 = !{!"VP", i32 0, i64 20, i32 2, i64 1234, i64 10, i64 5678, i64 5}
 
 ;--- invalid-kind.ll
 define void @test(ptr %0) {
   call void %0(), !prof !0
   ret void
 }
-!0 = !{!"VP", i32 4, i32 20, i64 1234, i64 10, i64 5678, i64 5}
+!0 = !{!"VP", i32 5, i64 20, i32 2, i64 1234, i64 10, i64 5678, i64 5}
 ; INVALID-KIND: Invalid VP !prof kind
 
 ;--- invalid-count.ll
@@ -26,13 +26,13 @@ define void @test(ptr %0) {
   call void %0(), !prof !0
   ret void
 }
-!0 = !{!"VP", i32 1, i64 1234, i64 10, i64 5678, i64 5}
-; INVALID-COUNT: VP !prof should have an even number of arguments after 'VP'
+!0 = !{!"VP", i32 1, i64 1234, i32 10, i64 5678, i64 5}
+; INVALID-COUNT: VP !prof is too small for its associated entry count
 
 ;--- invalid-place.ll
 define i32 @test(i32 %0) {
   %r = add i32 %0, 1, !prof !0
   ret i32 %r
 }
-!0 = !{!"VP", i32 1, i32 20, i64 1234, i64 10, i64 5678, i64 5}
+!0 = !{!"VP", i32 1, i64 20, i32 2, i64 1234, i64 10, i64 5678, i64 5}
 ; INVALID-PLACE: VP !prof indirect call or memop size expected to be applied to CallBase instructions only

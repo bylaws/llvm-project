@@ -24,4 +24,4 @@ attributes #0 = {"use-sample-profile"}
 !2 = !{i32 2, !"Debug Info Version", i32 3}
 !3 = distinct !DISubprogram(name: "test", scope: !1, file: !1, line: 1, unit: !0)
 !4 = !DILocation(line: 5, scope: !3)
-; CHECK: ![[PROF]] = !{!"VP", i32 0, i64 3457, i64 9191153033785521275, i64 2059, i64 -1069303473483922844, i64 1398}
+; CHECK: ![[PROF]] = !{!"VP", i32 0, i64 3457, i32 2, i64 9191153033785521275, i64 2059, i64 -1069303473483922844, i64 1398}

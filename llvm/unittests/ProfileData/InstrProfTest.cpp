@@ -11,10 +11,12 @@
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/MDBuilder.h"
 #include "llvm/IR/Module.h"
 #include "llvm/ProfileData/IndexedMemProfData.h"
 #include "llvm/ProfileData/InstrProfReader.h"
 #include "llvm/ProfileData/InstrProfWriter.h"
+#include "llvm/IR/ProfDataUtils.h"
 #include "llvm/ProfileData/MemProf.h"
 #include "llvm/ProfileData/MemProfData.inc"
 #include "llvm/ProfileData/MemProfRadixTree.h"
@@ -949,6 +951,158 @@ TEST_P(MaybeSparseInstrProfTest, annotate_vp_data) {
   ASSERT_EQ(2U, ValueData[2].Count);
   ASSERT_EQ(6000U, ValueData[3].Value);
   ASSERT_EQ(1U, ValueData[3].Count);
+}
+
+TEST_P(MaybeSparseInstrProfTest, annotate_multi_kind_vp) {
+  // Test that annotateValueSite supports multiple VP kinds on the same
+  // instruction, and that getValueProfDataFromInst reads each kind correctly.
+  // Also tests that re-annotating with the same kind replaces the old entry.
+  LLVMContext Ctx;
+  std::unique_ptr<Module> M(new Module("MyModule", Ctx));
+  FunctionType *FTy =
+      FunctionType::get(Type::getVoidTy(Ctx), /*isVarArg=*/false);
+  Function *F =
+      Function::Create(FTy, Function::ExternalLinkage, "caller", M.get());
+  BasicBlock *BB = BasicBlock::Create(Ctx, "", F);
+
+  IRBuilder<> Builder(BB);
+  BasicBlock *TBB = BasicBlock::Create(Ctx, "", F);
+  BasicBlock *FBB = BasicBlock::Create(Ctx, "", F);
+  Instruction *Inst = Builder.CreateCondBr(Builder.getTrue(), TBB, FBB);
+
+  // Step 1: Annotate with IPVK_IndirectCallTarget (kind=0)
+  InstrProfValueData VDCall[] = {{1000, 50}, {2000, 30}};
+  annotateValueSite(*M, *Inst, ArrayRef(VDCall), 100,
+                    IPVK_IndirectCallTarget, 5);
+
+  // Verify kind=0 is readable
+  uint64_t T;
+  auto ValData =
+      getValueProfDataFromInst(*Inst, IPVK_IndirectCallTarget, 5, T);
+  ASSERT_THAT(ValData, SizeIs(2));
+  ASSERT_EQ(100U, T);
+  ASSERT_EQ(1000U, ValData[0].Value);
+  ASSERT_EQ(50U, ValData[0].Count);
+
+  // Step 2: Annotate with IPVK_ArgumentValue (kind=3)
+  InstrProfValueData VDArg[] = {{42, 800}, {7, 150}};
+  annotateValueSite(*M, *Inst, ArrayRef(VDArg), 1000, IPVK_ArgumentValue, 5);
+
+  // Verify kind=3 is readable
+  ValData = getValueProfDataFromInst(*Inst, IPVK_ArgumentValue, 5, T);
+  ASSERT_THAT(ValData, SizeIs(2));
+  ASSERT_EQ(1000U, T);
+  ASSERT_EQ(42U, ValData[0].Value);
+  ASSERT_EQ(800U, ValData[0].Count);
+  ASSERT_EQ(7U, ValData[1].Value);
+  ASSERT_EQ(150U, ValData[1].Count);
+
+  // Verify kind=0 is still readable after adding kind=3
+  ValData = getValueProfDataFromInst(*Inst, IPVK_IndirectCallTarget, 5, T);
+  ASSERT_THAT(ValData, SizeIs(2));
+  ASSERT_EQ(100U, T);
+  ASSERT_EQ(1000U, ValData[0].Value);
+  ASSERT_EQ(50U, ValData[0].Count);
+
+  // Step 3: Re-annotate kind=0 with new data — appends a second kind=0 block
+  InstrProfValueData VDCallNew[] = {{9999, 90}};
+  annotateValueSite(*M, *Inst, ArrayRef(VDCallNew), 200,
+                    IPVK_IndirectCallTarget, 5);
+
+  // Index=0 still returns the original kind=0 block (unchanged)
+  ValData = getValueProfDataFromInst(*Inst, IPVK_IndirectCallTarget, 5, T);
+  ASSERT_THAT(ValData, SizeIs(2));
+  ASSERT_EQ(100U, T);
+  ASSERT_EQ(1000U, ValData[0].Value);
+  ASSERT_EQ(50U, ValData[0].Count);
+
+  // Index=1 returns the newly appended kind=0 block
+  ValData = getValueProfDataFromInst(*Inst, IPVK_IndirectCallTarget, 5, T,
+                                     false, /*Index=*/1);
+  ASSERT_THAT(ValData, SizeIs(1));
+  ASSERT_EQ(200U, T);
+  ASSERT_EQ(9999U, ValData[0].Value);
+  ASSERT_EQ(90U, ValData[0].Count);
+
+  // Verify kind=3 is preserved after appending another kind=0
+  ValData = getValueProfDataFromInst(*Inst, IPVK_ArgumentValue, 5, T);
+  ASSERT_THAT(ValData, SizeIs(2));
+  ASSERT_EQ(1000U, T);
+  ASSERT_EQ(42U, ValData[0].Value);
+  ASSERT_EQ(800U, ValData[0].Count);
+}
+
+TEST_P(MaybeSparseInstrProfTest, scale_multi_kind_vp) {
+  // Test that scaleProfData correctly scales all entries in a multi-kind VP
+  // metadata node and preserves NOMORE_ICP_MAGICNUM sentinel values.
+  LLVMContext Ctx;
+  std::unique_ptr<Module> M(new Module("MyModule", Ctx));
+  FunctionType *FTy =
+      FunctionType::get(Type::getVoidTy(Ctx), /*isVarArg=*/false);
+  Function *F =
+      Function::Create(FTy, Function::ExternalLinkage, "caller", M.get());
+  BasicBlock *BB = BasicBlock::Create(Ctx, "", F);
+
+  IRBuilder<> Builder(BB);
+  BasicBlock *TBB = BasicBlock::Create(Ctx, "", F);
+  BasicBlock *FBB = BasicBlock::Create(Ctx, "", F);
+  Instruction *Inst = Builder.CreateCondBr(Builder.getTrue(), TBB, FBB);
+
+  // Build multi-kind VP metadata manually:
+  // kind=0 (IndirectCallTarget): total=1000, 2 entries: (val=100, cnt=600), (val=200, cnt=MAGIC)
+  // kind=3 (ArgumentValue): total=500, 1 entry: (val=42, cnt=400)
+  MDBuilder MDB(Ctx);
+  SmallVector<Metadata *, 16> Vals;
+  Vals.push_back(MDB.createString("VP"));
+  // Kind=0
+  Vals.push_back(MDB.createConstant(
+      ConstantInt::get(Type::getInt32Ty(Ctx), IPVK_IndirectCallTarget)));
+  Vals.push_back(MDB.createConstant(
+      ConstantInt::get(Type::getInt64Ty(Ctx), 1000))); // TotalCount
+  Vals.push_back(MDB.createConstant(
+      ConstantInt::get(Type::getInt32Ty(Ctx), 2))); // NumEntries
+  Vals.push_back(MDB.createConstant(
+      ConstantInt::get(Type::getInt64Ty(Ctx), 100))); // Value1
+  Vals.push_back(MDB.createConstant(
+      ConstantInt::get(Type::getInt64Ty(Ctx), 600))); // Count1
+  Vals.push_back(MDB.createConstant(
+      ConstantInt::get(Type::getInt64Ty(Ctx), 200))); // Value2
+  Vals.push_back(MDB.createConstant(
+      ConstantInt::get(Type::getInt64Ty(Ctx), NOMORE_ICP_MAGICNUM))); // MAGIC
+  // Kind=3
+  Vals.push_back(MDB.createConstant(
+      ConstantInt::get(Type::getInt32Ty(Ctx), IPVK_ArgumentValue)));
+  Vals.push_back(MDB.createConstant(
+      ConstantInt::get(Type::getInt64Ty(Ctx), 500))); // TotalCount
+  Vals.push_back(MDB.createConstant(
+      ConstantInt::get(Type::getInt32Ty(Ctx), 1))); // NumEntries
+  Vals.push_back(MDB.createConstant(
+      ConstantInt::get(Type::getInt64Ty(Ctx), 42))); // Value
+  Vals.push_back(MDB.createConstant(
+      ConstantInt::get(Type::getInt64Ty(Ctx), 400))); // Count
+
+  Inst->setMetadata(LLVMContext::MD_prof, MDNode::get(Ctx, Vals));
+
+  // Scale by 1/2 (S=1, T=2)
+  scaleProfData(*Inst, 1, 2);
+
+  // Read back kind=0
+  uint64_t T;
+  auto ValData =
+      getValueProfDataFromInst(*Inst, IPVK_IndirectCallTarget, 5, T, true);
+  ASSERT_THAT(ValData, SizeIs(2));
+  ASSERT_EQ(500U, T); // 1000 / 2
+  ASSERT_EQ(100U, ValData[0].Value); // Values unchanged
+  ASSERT_EQ(300U, ValData[0].Count); // 600 / 2
+  ASSERT_EQ(200U, ValData[1].Value);
+  ASSERT_EQ(NOMORE_ICP_MAGICNUM, ValData[1].Count); // Magic preserved
+
+  // Read back kind=3
+  ValData = getValueProfDataFromInst(*Inst, IPVK_ArgumentValue, 5, T);
+  ASSERT_THAT(ValData, SizeIs(1));
+  ASSERT_EQ(250U, T); // 500 / 2
+  ASSERT_EQ(42U, ValData[0].Value); // Value unchanged
+  ASSERT_EQ(200U, ValData[0].Count); // 400 / 2
 }
 
 TEST_P(MaybeSparseInstrProfTest, icall_and_vtable_data_merge) {

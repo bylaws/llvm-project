@@ -334,8 +334,12 @@ void scaleProfData(Instruction &I, uint64_t S, uint64_t T) {
         // Value
         Vals.push_back(ProfileData->getOperand(Idx));
 
-        // Count
+        // Count — don't scale the magic number.
         uint64_t EntryCount = getCountFromMD(ProfileData->getOperand(Idx + 1));
+        if (EntryCount == NOMORE_ICP_MAGICNUM) {
+          Vals.push_back(ProfileData->getOperand(Idx + 1));
+          continue;
+        }
         APInt ScaledEntryCount = getScaledAPInt(EntryCount);
         Vals.push_back(MDB.createConstant(ConstantInt::get(
             Type::getInt64Ty(C), ScaledEntryCount.getLimitedValue())));

@@ -196,6 +196,10 @@ static cl::opt<unsigned> MaxNumArgumentValueAnnotations(
     cl::desc("Max number of precise value annotations for a single function"
              "argument value"));
 
+static cl::opt<unsigned> MaxNumLoopTripCountAnnotations(
+    "loop-trip-count-max-annotations", cl::init(3), cl::Hidden,
+    cl::desc("Max number of precise value annotations for a loop trip count"));
+
 // Command line option to control appending FunctionHash to the name of a COMDAT
 // function. This is to avoid the hash mismatch caused by the preinliner.
 static cl::opt<bool> DoComdatRenaming(
@@ -366,6 +370,7 @@ extern cl::opt<std::string> ViewBlockFreqFuncName;
 extern cl::opt<bool> EnableVTableValueProfiling;
 extern cl::opt<bool> EnableVTableProfileUse;
 extern cl::opt<bool> EnableArgumentValueProfiling;
+extern cl::opt<bool> EnableLoopTripCountProfiling;
 LLVM_ABI extern cl::opt<InstrProfCorrelator::ProfCorrelatorKind>
     ProfileCorrelate;
 } // namespace llvm
@@ -676,6 +681,8 @@ public:
         ValueSites[IPVK_VTableTarget] = VPC.get(IPVK_VTableTarget);
       if (EnableArgumentValueProfiling)
         ValueSites[IPVK_ArgumentValue] = VPC.get(IPVK_ArgumentValue);
+      if (EnableLoopTripCountProfiling)
+        ValueSites[IPVK_LoopTripCount] = VPC.get(IPVK_LoopTripCount);
     } else {
       NumOfCSPGOSelectInsts += SIVisitor.getNumOfSelectInsts();
       NumOfCSPGOMemIntrinsics += ValueSites[IPVK_MemOPSize].size();
@@ -1848,6 +1855,8 @@ static uint32_t getMaxNumAnnotations(InstrProfValueKind ValueProfKind) {
     return MaxNumVTableAnnotations;
   if (ValueProfKind == llvm::IPVK_ArgumentValue)
     return MaxNumArgumentValueAnnotations;
+  if (ValueProfKind == llvm::IPVK_LoopTripCount)
+    return MaxNumLoopTripCountAnnotations;
   return MaxNumAnnotations;
 }
 
@@ -2473,6 +2482,21 @@ void setIrrLoopHeaderMetadata(Module *M, Instruction *TI, uint64_t Count) {
   MDBuilder MDB(M->getContext());
   TI->setMetadata(llvm::LLVMContext::MD_irr_loop,
                   MDB.createIrrLoopHeaderWeight(Count));
+}
+
+SmallVector<ProfiledArgInfo> getProfiledArgs(Function &F) {
+  SmallVector<ProfiledArgInfo> Result;
+  uint32_t VPArgIdx = 0;
+  for (Argument &Arg : F.args()) {
+    Type *T = Arg.getType();
+    if (T->isIntegerTy() || T->isFloatTy() || T->isDoubleTy()) {
+      Result.push_back({&Arg, VPArgIdx++, ProfiledArgKind::Scalar});
+    } else if (T->isPointerTy() && Arg.hasNonNullAttr() &&
+               isArgUsedForVirtualDispatch(&Arg)) {
+      Result.push_back({&Arg, VPArgIdx++, ProfiledArgKind::VDispatchPtr});
+    }
+  }
+  return Result;
 }
 
 template <> struct GraphTraits<PGOUseFunc *> {

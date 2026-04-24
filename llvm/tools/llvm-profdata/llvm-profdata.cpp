@@ -423,6 +423,10 @@ static cl::opt<bool> ShowArgumentValues(
     cl::desc("Show the profiled argument values of function calls "
              "for shown functions"),
     cl::sub(ShowSubcommand));
+static cl::opt<bool> ShowLoopTripCounts(
+    "loop-trip-counts", cl::init(false),
+    cl::desc("Show the profiled loop trip count values for shown functions"),
+    cl::sub(ShowSubcommand));
 static cl::opt<bool>
     ShowDetailedSummary("detailed-summary", cl::init(false),
                         cl::desc("Show detailed profile summary"),
@@ -2991,6 +2995,11 @@ static int showInstrProfile(ShowFormat SFormat, raw_fd_ostream &OS) {
         OS << "    Number of instrumented argument values: "
            << NumArgumentValues << "\n";
 
+      uint32_t NumLoopTripCounts = Func.getNumValueSites(IPVK_LoopTripCount);
+      if (ShowLoopTripCounts)
+        OS << "    Number of instrumented loop trip counts: "
+           << NumLoopTripCounts << "\n";
+
       if (ShowCounts) {
         OS << "    Block counts: [";
         size_t Start = (IsIRInstr ? 0 : 1);
@@ -3024,6 +3033,12 @@ static int showInstrProfile(ShowFormat SFormat, raw_fd_ostream &OS) {
         OS << "    Argument Value Results:\n";
         traverseAllValueSites(Func, IPVK_ArgumentValue, VPStats[IPVK_ArgumentValue], OS,
                               nullptr);
+      }
+
+      if (ShowLoopTripCounts && NumLoopTripCounts > 0) {
+        OS << "    Loop Trip Count Results:\n";
+        traverseAllValueSites(Func, IPVK_LoopTripCount,
+                              VPStats[IPVK_LoopTripCount], OS, nullptr);
       }
     }
   }
@@ -3081,6 +3096,11 @@ static int showInstrProfile(ShowFormat SFormat, raw_fd_ostream &OS) {
   if (ShownFunctions && ShowArgumentValues) {
     OS << "Statistics for argument values profile:\n";
     showValueSitesStats(OS, IPVK_ArgumentValue, VPStats[IPVK_ArgumentValue]);
+  }
+
+  if (ShownFunctions && ShowLoopTripCounts) {
+    OS << "Statistics for loop trip count profile:\n";
+    showValueSitesStats(OS, IPVK_LoopTripCount, VPStats[IPVK_LoopTripCount]);
   }
 
   if (ShowDetailedSummary)

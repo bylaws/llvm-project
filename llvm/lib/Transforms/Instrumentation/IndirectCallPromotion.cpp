@@ -140,6 +140,63 @@ static cl::list<std::string> ICPIgnoredBaseTypes(
         "binary could be different due to profiling limitations. Type info "
         "names are those string literals used in LLVM type metadata"));
 
+bool llvm::isArgUsedForVirtualDispatch(const Argument *Arg) {
+  for (const User *U : Arg->users()) {
+    const auto *LI = dyn_cast<LoadInst>(U);
+    if (!LI)
+      continue;
+    for (const User *VU : LI->users()) {
+      const Value *MaybeGEP = VU;
+      if (auto *GEP = dyn_cast<GetElementPtrInst>(VU))
+        MaybeGEP = GEP;
+      for (const User *GU : MaybeGEP->users()) {
+        if (const auto *FnLoad = dyn_cast<LoadInst>(GU)) {
+          for (const User *FU : FnLoad->users()) {
+            if (const auto *CB = dyn_cast<CallBase>(FU)) {
+              if (CB->isIndirectCall() && CB->getCalledOperand() == FnLoad)
+                return true;
+            }
+          }
+        }
+        if (const auto *CB = dyn_cast<CallBase>(GU)) {
+          if (CB->isIndirectCall() && CB->getCalledOperand() == VU)
+            return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+std::optional<uint64_t>
+llvm::getAddressPointOffset(const GlobalVariable &VTableVar,
+                            StringRef CompatibleType) {
+  SmallVector<MDNode *> Types;
+  VTableVar.getMetadata(LLVMContext::MD_type, Types);
+
+  for (MDNode *Type : Types)
+    if (auto *TypeId = dyn_cast<MDString>(Type->getOperand(1).get());
+        TypeId && TypeId->getString() == CompatibleType)
+      return cast<ConstantInt>(
+                 cast<ConstantAsMetadata>(Type->getOperand(0))->getValue())
+          ->getZExtValue();
+
+  return std::nullopt;
+}
+
+Constant *llvm::getVTableAddressPointOffset(GlobalVariable *VTable,
+                                            uint32_t AddressPointOffset) {
+  Module &M = *VTable->getParent();
+  LLVMContext &Context = M.getContext();
+  assert(AddressPointOffset <
+             M.getDataLayout().getTypeAllocSize(VTable->getValueType()) &&
+         "Out-of-bound access");
+
+  return ConstantExpr::getInBoundsGetElementPtr(
+      Type::getInt8Ty(Context), VTable,
+      llvm::ConstantInt::get(Type::getInt32Ty(Context), AddressPointOffset));
+}
+
 namespace {
 
 // The key is a vtable global variable, and the value is a map.
@@ -164,42 +221,6 @@ using VirtualCallSiteTypeInfoMap =
 
 // The key is vtable GUID, and value is its value profile count.
 using VTableGUIDCountsMap = SmallDenseMap<uint64_t, uint64_t, 16>;
-
-// Return the address point offset of the given compatible type.
-//
-// Type metadata of a vtable specifies the types that can contain a pointer to
-// this vtable, for example, `Base*` can be a pointer to an derived type
-// but not vice versa. See also https://llvm.org/docs/TypeMetadata.html
-static std::optional<uint64_t>
-getAddressPointOffset(const GlobalVariable &VTableVar,
-                      StringRef CompatibleType) {
-  SmallVector<MDNode *> Types;
-  VTableVar.getMetadata(LLVMContext::MD_type, Types);
-
-  for (MDNode *Type : Types)
-    if (auto *TypeId = dyn_cast<MDString>(Type->getOperand(1).get());
-        TypeId && TypeId->getString() == CompatibleType)
-      return cast<ConstantInt>(
-                 cast<ConstantAsMetadata>(Type->getOperand(0))->getValue())
-          ->getZExtValue();
-
-  return std::nullopt;
-}
-
-// Return a constant representing the vtable's address point specified by the
-// offset.
-static Constant *getVTableAddressPointOffset(GlobalVariable *VTable,
-                                             uint32_t AddressPointOffset) {
-  Module &M = *VTable->getParent();
-  LLVMContext &Context = M.getContext();
-  assert(AddressPointOffset <
-             M.getDataLayout().getTypeAllocSize(VTable->getValueType()) &&
-         "Out-of-bound access");
-
-  return ConstantExpr::getInBoundsGetElementPtr(
-      Type::getInt8Ty(Context), VTable,
-      llvm::ConstantInt::get(Type::getInt32Ty(Context), AddressPointOffset));
-}
 
 // Return the basic block in which Use `U` is used via its `UserInst`.
 static BasicBlock *getUserBasicBlock(Use &U, Instruction *UserInst) {

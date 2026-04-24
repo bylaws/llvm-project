@@ -15,8 +15,12 @@
 
 #include "ValueProfileCollector.h"
 #include "llvm/Analysis/IndirectCallVisitor.h"
+#include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
+#include "llvm/IR/Dominators.h"
+#include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/InstVisitor.h"
+#include "llvm/Transforms/Instrumentation/PGOInstrumentation.h"
 
 using namespace llvm;
 using CandidateInfo = ValueProfileCollector::CandidateInfo;
@@ -145,47 +149,6 @@ inline std::vector<CallBase *> findDirectCallSites(Function &F) {
   return CV.Calls;
 }
 
-/// Check if a callee's formal parameter is used for virtual dispatch.
-/// Returns true if the argument has a load (vptr load) whose result feeds
-/// into indirect calls through the vtable pattern.
-static bool isArgUsedForVirtualDispatch(const Argument *Arg) {
-  // Look for: load from the argument (vptr load) -> GEP/bitcast ->
-  //           load (function pointer) -> indirect call
-  for (const User *U : Arg->users()) {
-    const auto *LI = dyn_cast<LoadInst>(U);
-    if (!LI)
-      continue;
-    // This load from the argument could be the vptr load.
-    // Check if the loaded value is used in an indirect call pattern.
-    for (const User *VU : LI->users()) {
-      // The vptr is used in a GEP to index into the vtable, or
-      // directly as a function pointer load base.
-      const Value *MaybeGEP = VU;
-      if (auto *GEP = dyn_cast<GetElementPtrInst>(VU))
-        MaybeGEP = GEP;
-
-      for (const User *GU : MaybeGEP->users()) {
-        if (const auto *FnLoad = dyn_cast<LoadInst>(GU)) {
-          for (const User *FU : FnLoad->users()) {
-            if (const auto *CB = dyn_cast<CallBase>(FU)) {
-              if (CB->isIndirectCall() &&
-                  CB->getCalledOperand() == FnLoad)
-                return true;
-            }
-          }
-        }
-        // Also handle the case where the load result IS the called operand
-        // (single level of indirection).
-        if (const auto *CB = dyn_cast<CallBase>(GU)) {
-          if (CB->isIndirectCall() && CB->getCalledOperand() == VU)
-            return true;
-        }
-      }
-    }
-  }
-  return false;
-}
-
 class ArgumentValueSpecializationPlugin {
   Function &F;
 
@@ -233,8 +196,120 @@ public:
   }
 };
 
+///------------------------ LoopTripCountProfilingPlugin ------------------------
+///
+/// Profiles the trip count bound of loops whose bound is loaded from memory
+/// or otherwise not a compile-time constant. Knowing the dominant trip count
+/// enables full unrolling, exact vectorization, and other loop transforms.
+class LoopTripCountProfilingPlugin {
+  Function &F;
+
+public:
+  static constexpr InstrProfValueKind Kind = IPVK_LoopTripCount;
+
+  LoopTripCountProfilingPlugin(Function &Fn, TargetLibraryInfo &TLI) : F(Fn) {}
+
+  /// Given a loop exit condition icmp, return the loop-invariant bound operand
+  /// (i.e. the one that is NOT the induction variable).
+  /// Since PGO instrumentation runs before LICM, the bound may still be inside
+  /// the loop as a load from a loop-invariant address. In that case, create a
+  /// hoisted copy in the preheader for profiling.
+  static Value *findLoopBound(Loop *L, ICmpInst *Cmp, BasicBlock *Preheader) {
+    Value *Op0 = Cmp->getOperand(0);
+    Value *Op1 = Cmp->getOperand(1);
+    bool Op0Invariant = L->isLoopInvariant(Op0);
+    bool Op1Invariant = L->isLoopInvariant(Op1);
+    // Exactly one should be loop-invariant (the bound).
+    if (Op0Invariant && !Op1Invariant)
+      return Op0;
+    if (!Op0Invariant && Op1Invariant)
+      return Op1;
+
+    // Neither operand is loop-invariant. This happens when LICM hasn't run
+    // yet. Look through sext/zext for a load from a loop-invariant address
+    // and hoist it to the preheader.
+    auto tryHoistBound = [&](Value *Op) -> Value * {
+      Value *V = Op;
+      SmallVector<CastInst *, 2> CastChain;
+      while (auto *Cast = dyn_cast<CastInst>(V)) {
+        if (Cast->getOpcode() == Instruction::SExt ||
+            Cast->getOpcode() == Instruction::ZExt) {
+          CastChain.push_back(Cast);
+          V = Cast->getOperand(0);
+        } else
+          break;
+      }
+      auto *LI = dyn_cast<LoadInst>(V);
+      if (!LI || LI->isVolatile())
+        return nullptr;
+      if (!L->isLoopInvariant(LI->getPointerOperand()))
+        return nullptr;
+
+      // The load is from a loop-invariant address. Hoist a copy to the
+      // preheader so we can profile the value once per loop entry.
+      IRBuilder<> Builder(Preheader->getTerminator());
+      Value *Result = Builder.CreateAlignedLoad(
+          LI->getType(), LI->getPointerOperand(), LI->getAlign(),
+          "ltc.bound");
+      // Replay sext/zext chain (innermost cast first).
+      for (auto It = CastChain.rbegin(); It != CastChain.rend(); ++It) {
+        Result = Builder.CreateCast((*It)->getOpcode(), Result,
+                                    (*It)->getType());
+      }
+      return Result;
+    };
+
+    if (Value *Hoisted = tryHoistBound(Op0))
+      return Hoisted;
+    if (Value *Hoisted = tryHoistBound(Op1))
+      return Hoisted;
+    return nullptr;
+  }
+
+  void run(std::vector<CandidateInfo> &Candidates) {
+    DominatorTree DT(F);
+    LoopInfo LI(DT);
+
+    for (Loop *L : LI.getLoopsInPreorder()) {
+      if (!L->isLoopSimplifyForm())
+        continue;
+
+      BasicBlock *ExitingBB = L->getExitingBlock();
+      if (!ExitingBB)
+        continue;
+
+      auto *BI = dyn_cast<BranchInst>(ExitingBB->getTerminator());
+      if (!BI || !BI->isConditional())
+        continue;
+
+      auto *Cmp = dyn_cast<ICmpInst>(BI->getCondition());
+      if (!Cmp)
+        continue;
+
+      BasicBlock *Preheader = L->getLoopPreheader();
+      if (!Preheader)
+        continue;
+
+      Value *Bound = findLoopBound(L, Cmp, Preheader);
+      if (!Bound || isa<ConstantInt>(Bound))
+        continue;
+
+      if (!Bound->getType()->isIntegerTy())
+        continue;
+
+      // Profile the bound value in the preheader (once per loop entry).
+      // Annotate the icmp — it survives LoopRotate and other loop transforms,
+      // unlike the preheader terminator which gets replaced.
+      Instruction *InsertPt = Preheader->getTerminator();
+      Instruction *AnnotatedInst = Cmp;
+      Candidates.emplace_back(CandidateInfo{Bound, InsertPt, AnnotatedInst});
+    }
+  }
+};
+
 ///----------------------- Registration of the plugins -------------------------
 /// For now, registering a plugin with the ValueProfileCollector is done by
 /// adding the plugin type to the VP_PLUGIN_LIST macro.
 #define VP_PLUGIN_LIST                                                         \
-  MemIntrinsicPlugin, IndirectCallPromotionPlugin, VTableProfilingPlugin, ArgumentValueSpecializationPlugin
+  MemIntrinsicPlugin, IndirectCallPromotionPlugin, VTableProfilingPlugin,      \
+      ArgumentValueSpecializationPlugin, LoopTripCountProfilingPlugin

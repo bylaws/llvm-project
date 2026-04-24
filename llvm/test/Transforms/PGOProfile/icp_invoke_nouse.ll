@@ -65,4 +65,4 @@ declare ptr @__cxa_begin_catch(ptr) local_unnamed_addr
 declare void @__cxa_end_catch() local_unnamed_addr
 
 !0 = !{!"invoke.ll:_ZL4bar1v"}
-!1 = !{!"VP", i32 0, i64 10000, i64 -2732222848796217051, i64 10000}
+!1 = !{!"VP", i32 0, i64 10000, i32 1, i64 -2732222848796217051, i64 10000}

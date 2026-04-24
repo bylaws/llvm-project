@@ -19,4 +19,4 @@ define void @b(ptr %v, ptr %p) !prof !1 {
 
 !0 = !{!"function_entry_count", i64 36}
 !1 = !{!"function_entry_count", i64 1}
-!2 = !{!"VP", i32 0, i64 18, i64 12157170054180749580, i64 18}
+!2 = !{!"VP", i32 0, i64 18, i32 1, i64 12157170054180749580, i64 18}

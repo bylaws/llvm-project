@@ -60,10 +60,10 @@ define i32 @_Z4testP4Base(ptr %0) !prof !15 {
 !15 = !{!"function_entry_count", i32 150}
 ; 1960855528937986108 is the MD5 hash of _ZTV4Base, and
 ; 13870436605473471591 is the MD5 hash of _ZTV7Derived
-!16 = !{!"VP", i32 2, i64 150, i64 1960855528937986108, i64 100, i64 13870436605473471591, i64 50}
+!16 = !{!"VP", i32 2, i64 150, i32 2, i64 1960855528937986108, i64 100, i64 13870436605473471591, i64 50}
 ; 5459407273543877811 is the MD5 hash of _ZN4Base4funcEv, and
 ; 6174874150489409711 is the MD5 hash of  _ZN7Derived4funcEv
-!17 = !{!"VP", i32 0, i64 150, i64 5459407273543877811, i64 100, i64 6174874150489409711, i64 50}
+!17 = !{!"VP", i32 0, i64 150, i32 2, i64 5459407273543877811, i64 100, i64 6174874150489409711, i64 50}
 
 ; ModuleSummaryIndex stores <guid, global-value summary> map in std::map; so
 ; global value summares are printed out in the order that gv's guid increases.

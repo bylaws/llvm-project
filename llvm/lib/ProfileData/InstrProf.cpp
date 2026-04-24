@@ -241,6 +241,12 @@ cl::opt<bool> EnableArgumentValueProfiling(
 	     "This information will be used by the function specialization "
              "pass for specialization on non-constant arguments."));
 
+cl::opt<bool> EnableLoopTripCountProfiling(
+    "enable-loop-trip-count-profiling", cl::init(true),
+    cl::desc("If true, loop trip count values will be profiled. "
+             "This information will be used for loop versioning on "
+             "dominant trip counts."));
+
 std::string getInstrProfSectionName(InstrProfSectKind IPSK,
                                     Triple::ObjectFormatType OF,
                                     bool AddSegmentInfo) {
@@ -1387,7 +1393,7 @@ void annotateValueSite(Module &M, Instruction &Inst,
   MDBuilder MDHelper(Ctx);
   SmallVector<Metadata *, 3> Vals;
 
-  // Append contents to existing value profiling node if present
+  // Append contents to existing value profiling node if present.
   MDNode *Base = mayHaveValueProfile(Inst);
   if (Base) {
     Vals.insert(Vals.begin(), Base->op_begin(), Base->op_end());
@@ -1403,9 +1409,9 @@ void annotateValueSite(Module &M, Instruction &Inst,
   Vals.push_back(
       MDHelper.createConstant(ConstantInt::get(Type::getInt64Ty(Ctx), Sum)));
   // Value Profile Data Count
-  int misn = std::min<int32_t>(MaxMDCount, static_cast<int32_t>(VDs.size()) );
+  uint32_t NumEntries = std::min<uint32_t>(MaxMDCount, VDs.size());
   Vals.push_back(MDHelper.createConstant(
-      ConstantInt::get(Type::getInt32Ty(Ctx), misn)));
+      ConstantInt::get(Type::getInt32Ty(Ctx), NumEntries)));
 
   // Value Profile Data
   uint32_t MDCount = MaxMDCount;
@@ -1700,6 +1706,9 @@ void OverlapStats::dump(raw_fd_ostream &OS) const {
       break;
     case IPVK_ArgumentValue:
       strncpy(ProfileKindName, "Argument", 19);
+      break;
+    case IPVK_LoopTripCount:
+      strncpy(ProfileKindName, "LoopTripCnt", 19);
       break;
     default:
       snprintf(ProfileKindName, 19, "VP[%d]", I);

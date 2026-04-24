@@ -23,5 +23,5 @@ declare void @llvm.memcpy.p0.p0.i32(ptr nocapture writeonly, ptr nocapture reado
 declare void @llvm.memcpy.p0.p0.i64(ptr nocapture writeonly, ptr nocapture readonly, i64, i1)
 
 !1 = !{!"function_entry_count", i64 5170}
-!2 = !{!"VP", i32 1, i64 2585, i64 3, i64 1802, i64 2, i64 783}
+!2 = !{!"VP", i32 1, i64 2585, i32 2, i64 3, i64 1802, i64 2, i64 783}
 
