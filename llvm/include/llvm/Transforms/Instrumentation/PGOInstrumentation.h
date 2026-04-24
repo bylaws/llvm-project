@@ -17,18 +17,24 @@
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/IntrusiveRefCntPtr.h"
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringRef.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/VirtualFileSystem.h"
 #include <cstdint>
+#include <optional>
 #include <string>
 
 namespace llvm {
 
 LLVM_ABI extern cl::opt<bool> DebugInfoCorrelate;
 
+class Argument;
+class Constant;
 class Function;
+class GlobalVariable;
 class Instruction;
 class Module;
 
@@ -103,6 +109,25 @@ public:
 
   LLVM_ABI PreservedAnalyses run(Function &F, FunctionAnalysisManager &MAM);
 };
+
+LLVM_ABI bool isArgUsedForVirtualDispatch(const Argument *Arg);
+
+enum class ProfiledArgKind { Scalar, VDispatchPtr };
+
+struct ProfiledArgInfo {
+  Argument *Arg;
+  uint32_t VPArgIdx;
+  ProfiledArgKind Kind;
+};
+
+LLVM_ABI SmallVector<ProfiledArgInfo> getProfiledArgs(Function &F);
+
+LLVM_ABI std::optional<uint64_t>
+getAddressPointOffset(const GlobalVariable &VTableVar,
+                      StringRef CompatibleType);
+
+LLVM_ABI Constant *getVTableAddressPointOffset(GlobalVariable *VTable,
+                                               uint32_t AddressPointOffset);
 
 LLVM_ABI void setProfMetadata(Module *M, Instruction *TI,
                               ArrayRef<uint64_t> EdgeCounts, uint64_t MaxCount);

@@ -58,9 +58,9 @@ attributes #0 = { uwtable mustprogress "disable-tail-calls"="false" "frame-point
 !19 = distinct !DISubprogram(name: "foo", linkageName: "_Z3foov", scope: !1, file: !1, line: 10, type: !8, scopeLine: 10, flags: DIFlagPrototyped | DIFlagAllCallsDescribed, spFlags: DISPFlagDefinition | DISPFlagOptimized, unit: !0, retainedNodes: !2)
 !20 = !DILocation(line: 11, column: 3, scope: !19)
 !21 = !DILocation(line: 12, column: 3, scope: !19)
-; CHECK: ![[PROF_ID1]] = !{!"VP", i32 0, i64 7200, i64 -7383239051784516332, i64 -1, i64 -3834823603621627078, i64 7200}
-; CHECK: ![[PROF_ID2]] = !{!"VP", i32 0, i64 800, i64 -7383239051784516332, i64 -1, i64 -3834823603621627078, i64 800}
-!22 = !{!"VP", i32 0, i64 8000, i64 -7383239051784516332, i64 -1, i64 125292384912345234234, i64 8000}
+; CHECK: ![[PROF_ID1]] = !{!"VP", i32 0, i64 7200, i32 2, i64 -7383239051784516332, i64 -1, i64 -3834823603621627078, i64 7200}
+; CHECK: ![[PROF_ID2]] = !{!"VP", i32 0, i64 800, i32 2, i64 -7383239051784516332, i64 -1, i64 -3834823603621627078, i64 800}
+!22 = !{!"VP", i32 0, i64 8000, i32 2, i64 -7383239051784516332, i64 -1, i64 125292384912345234234, i64 8000}
 !23 = !{!"function_entry_count", i64 1000} 
 !24 = !{!"branch_weights", i32 100}
 !25 = !{i32 1, !"ProfileSummary", !26}

@@ -16,7 +16,10 @@
 #include "ValueProfileCollector.h"
 #include "llvm/Analysis/IndirectCallVisitor.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
+#include "llvm/IR/Dominators.h"
+#include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/InstVisitor.h"
+#include "llvm/Transforms/Instrumentation/PGOInstrumentation.h"
 
 using namespace llvm;
 using CandidateInfo = ValueProfileCollector::CandidateInfo;
@@ -143,47 +146,6 @@ inline std::vector<CallBase *> findDirectCallSites(Function &F) {
   PGODirectCallSiteVisitor CV;
   CV.visit(F);
   return CV.Calls;
-}
-
-/// Check if a callee's formal parameter is used for virtual dispatch.
-/// Returns true if the argument has a load (vptr load) whose result feeds
-/// into indirect calls through the vtable pattern.
-static bool isArgUsedForVirtualDispatch(const Argument *Arg) {
-  // Look for: load from the argument (vptr load) -> GEP/bitcast ->
-  //           load (function pointer) -> indirect call
-  for (const User *U : Arg->users()) {
-    const auto *LI = dyn_cast<LoadInst>(U);
-    if (!LI)
-      continue;
-    // This load from the argument could be the vptr load.
-    // Check if the loaded value is used in an indirect call pattern.
-    for (const User *VU : LI->users()) {
-      // The vptr is used in a GEP to index into the vtable, or
-      // directly as a function pointer load base.
-      const Value *MaybeGEP = VU;
-      if (auto *GEP = dyn_cast<GetElementPtrInst>(VU))
-        MaybeGEP = GEP;
-
-      for (const User *GU : MaybeGEP->users()) {
-        if (const auto *FnLoad = dyn_cast<LoadInst>(GU)) {
-          for (const User *FU : FnLoad->users()) {
-            if (const auto *CB = dyn_cast<CallBase>(FU)) {
-              if (CB->isIndirectCall() &&
-                  CB->getCalledOperand() == FnLoad)
-                return true;
-            }
-          }
-        }
-        // Also handle the case where the load result IS the called operand
-        // (single level of indirection).
-        if (const auto *CB = dyn_cast<CallBase>(GU)) {
-          if (CB->isIndirectCall() && CB->getCalledOperand() == VU)
-            return true;
-        }
-      }
-    }
-  }
-  return false;
 }
 
 class ArgumentValueSpecializationPlugin {

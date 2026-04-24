@@ -24,6 +24,21 @@
 #include <map>
 
 namespace llvm {
+struct CSVRow {
+  std::string FunctionName;
+  std::string Caller;
+  std::string ArgsSpecialized;
+  unsigned OriginalLatency;
+  unsigned SpecializedLatency;
+  double LatencyReductionPct;
+  unsigned OriginalSize;
+  unsigned SpecializedSize;
+  unsigned WeightedLatency;
+  unsigned ValProp;
+  bool Accepted;
+  std::string RejectionReason;
+};
+
 struct PGOSpec {
   Function *F;
   Function *Clone = nullptr;
@@ -43,12 +58,13 @@ struct PGOSpec {
     return ExistingFunc ? ExistingFunc : Clone;
   }
 
-  PGOSpec(Function *F, Function *Clone, Function *Existing, ArgInfo &&A, unsigned OrigCodeSize,
-          unsigned OrigLatency, unsigned SpecCodeSize, unsigned SpecLatency,
-          uint64_t Cnt, unsigned ValueProp)
-      : F(F), Clone(Clone), ExistingFunc(Existing), Arg(A), OriginalCodeSize(OrigCodeSize),
-        OriginalLatency(OrigLatency), SpecializedCodeSize(SpecCodeSize),
-        SpecializedLatency(SpecLatency), Count(Cnt), MinValueProp(ValueProp) {}
+  PGOSpec(Function *F, Function *Clone, Function *Existing, ArgInfo &&A,
+          unsigned OrigCodeSize, unsigned OrigLatency, unsigned SpecCodeSize,
+          unsigned SpecLatency, uint64_t Cnt, unsigned ValueProp)
+      : F(F), Clone(Clone), ExistingFunc(Existing), Arg(A),
+        OriginalCodeSize(OrigCodeSize), OriginalLatency(OrigLatency),
+        SpecializedCodeSize(SpecCodeSize), SpecializedLatency(SpecLatency),
+        Count(Cnt), MinValueProp(ValueProp) {}
 };
 
 class PGOFunctionSpecializer {
@@ -59,10 +75,10 @@ class PGOFunctionSpecializer {
   std::function<const TargetLibraryInfo &(Function &)> GetTLI;
   std::function<TargetTransformInfo &(Function &)> GetTTI;
   std::function<AssumptionCache &(Function &)> GetAC;
-  std::function<DominatorTree &(Function &)> GetDT;
   int OptLevel;
 
   DenseMap<Function *, CodeMetrics> FunctionMetrics;
+  SmallVector<CSVRow, 32> CSVRows;
 
 public:
   PGOFunctionSpecializer(
@@ -70,10 +86,9 @@ public:
       std::function<BlockFrequencyInfo &(Function &)> GetBFI,
       std::function<const TargetLibraryInfo &(Function &)> GetTLI,
       std::function<TargetTransformInfo &(Function &)> GetTTI,
-      std::function<AssumptionCache &(Function &)> GetAC,
-      std::function<DominatorTree &(Function &)> GetDT, int OptLevel)
+      std::function<AssumptionCache &(Function &)> GetAC, int OptLevel)
       : M(M), FAM(FAM), PSI(PSI), GetBFI(GetBFI), GetTLI(GetTLI),
-        GetTTI(GetTTI), GetAC(GetAC), GetDT(GetDT), OptLevel(OptLevel) {}
+        GetTTI(GetTTI), GetAC(GetAC), OptLevel(OptLevel) {}
 
   LLVM_ABI ~PGOFunctionSpecializer();
 
@@ -91,15 +106,22 @@ private:
                            SmallVectorImpl<PGOSpec> &AllSpecs,
                            FunctionCallee &BlockTag);
 
+  FunctionPassManager buildTrialPipeline();
+
+  void writeCSV();
+
   bool isCandidateFunction(Function *F);
 };
 
 class PGOFunctionSpecializationPass
     : public PassInfoMixin<PGOFunctionSpecializationPass> {
   int OptLevel;
+  ThinOrFullLTOPhase LTOPhase;
 
 public:
-  PGOFunctionSpecializationPass(int OptLevel = 2) : OptLevel(OptLevel) {}
+  PGOFunctionSpecializationPass(int OptLevel = 2,
+      ThinOrFullLTOPhase LTOPhase = ThinOrFullLTOPhase::None)
+      : OptLevel(OptLevel), LTOPhase(LTOPhase) {}
   PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM);
 };
 

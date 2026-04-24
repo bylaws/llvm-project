@@ -1403,9 +1403,9 @@ void annotateValueSite(Module &M, Instruction &Inst,
   Vals.push_back(
       MDHelper.createConstant(ConstantInt::get(Type::getInt64Ty(Ctx), Sum)));
   // Value Profile Data Count
-  int misn = std::min<int32_t>(MaxMDCount, static_cast<int32_t>(VDs.size()) );
+  uint32_t NumEntries = std::min<uint32_t>(MaxMDCount, VDs.size());
   Vals.push_back(MDHelper.createConstant(
-      ConstantInt::get(Type::getInt32Ty(Ctx), misn)));
+      ConstantInt::get(Type::getInt32Ty(Ctx), NumEntries)));
 
   // Value Profile Data
   uint32_t MDCount = MaxMDCount;

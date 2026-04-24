@@ -67,5 +67,5 @@ attributes #2 = { nofree nounwind }
 ; be dropped when the indirect call is annotated with new profile.
 ; The original value -7383239051784516332 and its count -1 should be kept
 ; because -1 is NOMORE_ICP_MAGICNUM.
-; CHECK: ![[PROF_ID]] = !{!"VP", i32 0, i64 5860, i64 -7383239051784516332, i64 -1, i64 -7701940972712279918, i64 5860}
-!22 = !{!"VP", i32 0, i64 8000, i64 -7383239051784516332, i64 -1, i64 125292384912345234234, i64 8000}
+; CHECK: ![[PROF_ID]] = !{!"VP", i32 0, i64 5860, i32 2, i64 -7383239051784516332, i64 -1, i64 -7701940972712279918, i64 5860}
+!22 = !{!"VP", i32 0, i64 8000, i32 2, i64 -7383239051784516332, i64 -1, i64 125292384912345234234, i64 8000}

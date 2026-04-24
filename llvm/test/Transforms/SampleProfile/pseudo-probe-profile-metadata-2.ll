@@ -34,8 +34,8 @@ return:
   ret i32 %1
 }
 
-; CHECK: ![[#PROF]] = !{!"VP", i32 0, i64 7, i64 9191153033785521275, i64 5, i64 -1069303473483922844, i64 2}
-; OVW: ![[#PROF]] = !{!"VP", i32 0, i64 7, i64 9191153033785521275, i64 5, i64 -1069303473483922844, i64 2}
+; CHECK: ![[#PROF]] = !{!"VP", i32 0, i64 7, i32 2, i64 9191153033785521275, i64 5, i64 -1069303473483922844, i64 2}
+; OVW: ![[#PROF]] = !{!"VP", i32 0, i64 7, i32 2, i64 9191153033785521275, i64 5, i64 -1069303473483922844, i64 2}
 
 declare void @llvm.pseudoprobe(i64, i64, i32, i64) #0
 
@@ -63,4 +63,4 @@ attributes #0 = {"use-sample-profile"}
 ;; with an index of 3 and probe factor of 0.
 !14 = !DILexicalBlockFile(scope: !4, file: !5, discriminator: 134217759)
 !15 = distinct !DILocation(line: 10, column: 11, scope: !14)
-!16 = !{!"VP", i32 0, i64 7, i64 9191153033785521275, i64 5, i64 -1069303473483922844, i64 2}
+!16 = !{!"VP", i32 0, i64 7, i32 2, i64 9191153033785521275, i64 5, i64 -1069303473483922844, i64 2}

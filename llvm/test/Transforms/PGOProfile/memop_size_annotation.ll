@@ -37,8 +37,8 @@ for.body3:
   %bcmp = call i32 @bcmp(ptr %dst, ptr %src, i64 %conv)
 ; MEMOP_ANNOTATION: call i32 @bcmp(ptr %dst, ptr %src, i64 %conv)
 ; MEMOP_ANNOTATION-SAME: !prof ![[MEMOP_VALUESITE]]
-; MEMOP_ANNOTATION9: ![[MEMOP_VALUESITE]] = !{!"VP", i32 1, i64 556, i64 1, i64 99, i64 2, i64 88, i64 3, i64 77, i64 9, i64 72, i64 4, i64 66, i64 5, i64 55, i64 6, i64 44, i64 7, i64 33, i64 8, i64 22}
-; MEMOP_ANNOTATION4: ![[MEMOP_VALUESITE]] = !{!"VP", i32 1, i64 556, i64 1, i64 99, i64 2, i64 88, i64 3, i64 77, i64 9, i64 72}
+; MEMOP_ANNOTATION9: ![[MEMOP_VALUESITE]] = !{!"VP", i32 1, i64 556, i32 9, i64 1, i64 99, i64 2, i64 88, i64 3, i64 77, i64 9, i64 72, i64 4, i64 66, i64 5, i64 55, i64 6, i64 44, i64 7, i64 33, i64 8, i64 22}
+; MEMOP_ANNOTATION4: ![[MEMOP_VALUESITE]] = !{!"VP", i32 1, i64 556, i32 4, i64 1, i64 99, i64 2, i64 88, i64 3, i64 77, i64 9, i64 72}
   br label %for.inc
 
 for.inc:

@@ -62,6 +62,7 @@
 ; CHECK-O-NEXT: Running analysis: TypeBasedAA
 ; CHECK-O-NEXT: Running analysis: OuterAnalysisManagerProxy
 ; CHECK-O-NEXT: Running pass: SimplifyCFGPass
+; CHECK-O-NEXT: Running pass: PGOFunctionSpecializationPass
 ; CHECK-O-NEXT: Running pass: AlwaysInlinerPass
 ; CHECK-PRELINK-O-NEXT: Running analysis: ProfileSummaryAnalysis
 ; CHECK-O-NEXT: Running pass: ModuleInlinerWrapperPass
@@ -158,14 +159,17 @@
 ; CHECK-O-NEXT: Running pass: InvalidateAnalysisPass<{{.*}}ShouldNotRunFunctionPassesAnalysis
 ; CHECK-O-NEXT: Invalidating analysis: ShouldNotRunFunctionPassesAnalysis
 ; CHECK-O-NEXT: Invalidating analysis: InlineAdvisorAnalysis
+; CHECK-O-NEXT: Running pass: AlwaysInlinerPass
 ; CHECK-O-NEXT: Running pass: DeadArgumentEliminationPass
 ; CHECK-O-NEXT: Running pass: SimplifyTypeTestsPass
 ; CHECK-O-NEXT: Running pass: CoroCleanupPass
 ; CHECK-POSTLINK-O-NEXT: Running pass: GlobalOptPass
-; CHECK-POSTLINK-O-NEXT: Running pass: GlobalDCEPass
+; CHECK-POSTLINK-O: Running pass: GlobalDCEPass
 ; CHECK-POSTLINK-O-NEXT: Running pass: EliminateAvailableExternallyPass
 ; CHECK-POSTLINK-O-NEXT: Running pass: ReversePostOrderFunctionAttrsPass
+; CHECK-POSTLINK-O-NEXT: Running analysis: LazyCallGraphAnalysis
 ; CHECK-POSTLINK-O-NEXT: Running pass: RecomputeGlobalsAAPass
+; CHECK-POSTLINK-O-NEXT: Running analysis: CallGraphAnalysis
 ; CHECK-POST-EP-OPT-EARLY-NEXT: Running pass: NoOpModulePass
 ; CHECK-POSTLINK-O-NEXT: Running pass: Float2IntPass
 ; CHECK-POSTLINK-O-NEXT: Running pass: LowerConstantIntrinsicsPass
@@ -173,15 +177,19 @@
 ; CHECK-EXT: Running pass: {{.*}}::Bye
 ; CHECK-POSTLINK-O-NEXT: Running pass: LoopSimplifyPass
 ; CHECK-POSTLINK-O-NEXT: Running pass: LCSSAPass
+; CHECK-POSTLINK-O-NEXT: Running analysis: ScalarEvolutionAnalysis on foo
+; CHECK-POSTLINK-O-NEXT: Running analysis: InnerAnalysisManagerProxy<{{.*}}Loop
 ; CHECK-POSTLINK-O-NEXT: Running pass: LoopRotatePass
 ; CHECK-POSTLINK-O-NEXT: Running pass: LoopDeletionPass
 ; CHECK-POSTLINK-O-NEXT: Running pass: LoopDistributePass
 ; CHECK-POSTLINK-O-NEXT: Running analysis: LoopAccessAnalysis on foo
 ; CHECK-POSTLINK-O-NEXT: Running pass: InjectTLIMappings
 ; CHECK-POSTLINK-O-NEXT: Running pass: LoopVectorizePass
+; CHECK-POSTLINK-O-NEXT: Running analysis: DemandedBitsAnalysis on foo
 ; CHECK-POSTLINK-O-NEXT: Running pass: InferAlignmentPass
 ; CHECK-POSTLINK-O-NEXT: Running pass: LoopLoadEliminationPass
 ; CHECK-POSTLINK-O-NEXT: Running pass: InstCombinePass
+; CHECK-POSTLINK-O-NEXT: Running analysis: LastRunTrackingAnalysis on foo
 ; CHECK-POSTLINK-O-NEXT: Running pass: SimplifyCFGPass
 ; CHECK-POSTLINK-O2-NEXT: Running pass: SLPVectorizerPass
 ; CHECK-POSTLINK-O3-NEXT: Running pass: SLPVectorizerPass
@@ -195,6 +203,7 @@
 ; CHECK-POSTLINK-O-NEXT: Running pass: InstCombinePass
 ; CHECK-POSTLINK-O-NEXT: Running pass: LoopSimplifyPass
 ; CHECK-POSTLINK-O-NEXT: Running pass: LCSSAPass
+; CHECK-POSTLINK-O-NEXT: Running analysis: MemorySSAAnalysis on foo
 ; CHECK-POSTLINK-O-NEXT: Running pass: LICMPass
 ; CHECK-POSTLINK-O-NEXT: Running pass: AlignmentFromAssumptionsPass
 ; CHECK-POSTLINK-O-NEXT: Running pass: LoopSinkPass

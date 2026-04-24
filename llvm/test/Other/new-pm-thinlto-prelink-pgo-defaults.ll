@@ -72,6 +72,9 @@
 ; CHECK-O-NEXT: Running pass: InstCombinePass on foo
 ; CHECK-O-NEXT: Invalidating analysis: InlineAdvisorAnalysis
 ; CHECK-O-NEXT: Running pass: GlobalDCEPass
+; CHECK-O-NEXT: Running pass: ArgumentPromotionPass
+; CHECK-O-NEXT: Running pass: CoroSplitPass
+; CHECK-O-NEXT: Running pass: CoroAnnotationElidePass
 ; CHECK-O-NEXT: Running pass: PGOInstrumentationUse
 ; CHECK-O-NEXT: Running analysis: ProfileSummaryAnalysis
 ; CHECK-O-NEXT: Running analysis: BranchProbabilityAnalysis on foo
@@ -86,6 +89,9 @@
 ; CHECK-O-NEXT: Running analysis: InnerAnalysisManagerProxy
 ; CHECK-O-NEXT: Running analysis: OptimizationRemarkEmitterAnalysis on foo
 ; CHECK-O-NEXT: Running pass: PGOForceFunctionAttrsPass
+; CHECK-O-NEXT: Running pass: PGOFunctionSpecializationPass
+; CHECK-O-NEXT: Running analysis: AssumptionAnalysis on foo
+; CHECK-O-NEXT: Running analysis: TargetIRAnalysis on foo
 ; CHECK-O-NEXT: Running pass: AlwaysInlinerPass
 ; CHECK-O-NEXT: Running pass: ModuleInlinerWrapperPass
 ; CHECK-O-NEXT: Running analysis: InlineAdvisorAnalysis
@@ -107,8 +113,6 @@
 ; CHECK-O3-NEXT: Running pass: OpenMPOptCGSCCPass
 ; CHECK-O-NEXT: Running pass: SROAPass
 ; CHECK-O-NEXT: Running analysis: DominatorTreeAnalysis
-; CHECK-O-NEXT: Running analysis: AssumptionAnalysis
-; CHECK-O-NEXT: Running analysis: TargetIRAnalysis
 ; CHECK-O-NEXT: Running pass: EarlyCSEPass
 ; CHECK-O-NEXT: Running analysis: MemorySSAAnalysis
 ; CHECK-O-NEXT: Running analysis: AAManager
@@ -189,10 +193,11 @@
 ; CHECK-O-NEXT: Running pass: InvalidateAnalysisPass<{{.*}}ShouldNotRunFunctionPassesAnalysis
 ; CHECK-O-NEXT: Invalidating analysis: ShouldNotRunFunctionPassesAnalysis
 ; CHECK-O-NEXT: Invalidating analysis: InlineAdvisorAnalysis
+; CHECK-O-NEXT: Running pass: AlwaysInlinerPass
 ; CHECK-O-NEXT: Running pass: DeadArgumentEliminationPass
 ; CHECK-O-NEXT: Running pass: GlobalOptPass
 ; CHECK-O-NEXT: Running analysis: TargetLibraryAnalysis on bar
-; CHECK-O-NEXT: Running pass: GlobalDCEPass
+; CHECK-O: Running pass: GlobalDCEPass
 ; CHECK-EXT: Running pass: {{.*}}::Bye
 ; CHECK-O-NEXT: Running pass: AnnotationRemarksPass on foo
 ; CHECK-O-NEXT: Running pass: CanonicalizeAliasesPass

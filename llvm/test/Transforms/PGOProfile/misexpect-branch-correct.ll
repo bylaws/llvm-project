@@ -3,7 +3,7 @@
 
 ; RUN: llvm-profdata merge %S/Inputs/misexpect-branch-correct.proftext -o %t.profdata
 
-; RUN: opt < %s -passes="function(lower-expect),pgo-instr-use" -pgo-test-profile-file=%t.profdata -pgo-warn-misexpect -pass-remarks=misexpect -S  2>&1 | FileCheck %s
+; RUN: opt < %s -passes="function(lower-expect),pgo-instr-use" -pgo-test-profile-file=%t.profdata -pgo-warn-misexpect -pass-remarks=misexpect -enable-argument-value-profiling=false -S  2>&1 | FileCheck %s
 
 ; CHECK-NOT: warning: {{.*}}
 ; CHECK-NOT: remark: {{.*}}

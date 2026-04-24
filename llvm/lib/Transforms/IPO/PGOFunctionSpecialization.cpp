@@ -19,23 +19,26 @@
 #include "llvm/Analysis/ValueLatticeUtils.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/DiagnosticInfo.h"
-#include "llvm/IR/Dominators.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/ProfileData/InstrProf.h"
-#include "llvm/Transforms/Instrumentation/PGOInstrumentation.h"
+#include "llvm/Support/Debug.h"
+#include "llvm/Support/FileSystem.h"
+#include "llvm/Support/Format.h"
 #include "llvm/Transforms/AggressiveInstCombine/AggressiveInstCombine.h"
 #include "llvm/Transforms/InstCombine/InstCombine.h"
+#include "llvm/Transforms/Instrumentation/PGOInstrumentation.h"
 #include "llvm/Transforms/Scalar/ADCE.h"
 #include "llvm/Transforms/Scalar/EarlyCSE.h"
 #include "llvm/Transforms/Scalar/GVN.h"
 #include "llvm/Transforms/Scalar/IndVarSimplify.h"
+#include "llvm/Transforms/Scalar/InstSimplifyPass.h"
+#include "llvm/Transforms/Scalar/LICM.h"
 #include "llvm/Transforms/Scalar/LoopDeletion.h"
 #include "llvm/Transforms/Scalar/LoopFlatten.h"
 #include "llvm/Transforms/Scalar/LoopIdiomRecognize.h"
-#include "llvm/Transforms/Scalar/LICM.h"
 #include "llvm/Transforms/Scalar/LoopInstSimplify.h"
 #include "llvm/Transforms/Scalar/LoopRotation.h"
 #include "llvm/Transforms/Scalar/LoopSimplifyCFG.h"
@@ -57,6 +60,10 @@ using namespace llvm;
 
 STATISTIC(NumSpecsCreated, "Number of specializations created");
 
+static cl::opt<bool> DisablePass("disable-pgo-specialization", cl::init(false),
+                                 cl::Hidden,
+                                 cl::desc("Disable the pass entirely"));
+
 static cl::opt<bool> ForceSpecialization(
     "force-pgo-specialization", cl::init(false), cl::Hidden,
     cl::desc(
@@ -68,65 +75,74 @@ static cl::opt<unsigned> MinFunctionSize(
     cl::desc("Don't specialize functions that have less than this number of "
              "instructions"));
 
-static cl::opt<unsigned>
-    AnalysisCutoffThresh("pgofuncspec-analysis-cutoff-thresh", cl::init(30),
-                         cl::Hidden, cl::desc("TODO"));
+static cl::opt<unsigned> AnalysisCutoffThresh(
+    "pgofuncspec-analysis-cutoff-thresh", cl::init(30), cl::Hidden,
+    cl::desc("Minimum value proportion upon which profiling is attempted"));
+
+static cl::opt<unsigned> CandidateCutoffThresh(
+    "pgofuncspec-candidate-cutoff-thresh", cl::init(97), cl::Hidden,
+    cl::desc(
+        "Maximum normalised latency reduction before a candidate is rejected"));
 
 static cl::opt<unsigned>
-    CandidateCutoffThresh("pgofuncspec-candidate-cutoff-thresh", cl::init(97),
-                          cl::Hidden, cl::desc("TODO"));
-
-static cl::opt<unsigned> DispatchCost("pgofuncspec-dispatch-cost", cl::init(7),
-                                      cl::Hidden, cl::desc("TODO"));
+    DispatchCost("pgofuncspec-dispatch-cost", cl::init(7), cl::Hidden,
+                 cl::desc("Cost of maybe-non-predicted dispatch branch"));
 
 static cl::opt<unsigned> HotFuncPercentile(
-    "pgofuncspec-hot-func-percentile", cl::init(990000), cl::Hidden,
-    cl::desc("Percentile cutoff for hot call sites (encoded as cutoff*10000, "
-             "800000 = top 20%)"));
-static cl::opt<unsigned> BlowupFactor("pgofuncspec-blowup-factor", cl::init(30),
-                                      cl::Hidden, cl::desc("TODO"));
+    "pgofuncspec-hot-func-percentile", cl::init(999990), cl::Hidden,
+    cl::desc("Percentile cutoff for hot call sites (encoded as cutoff*10000)"));
+static cl::opt<unsigned> BlowupFactor(
+    "pgofuncspec-blowup-factor", cl::init(30), cl::Hidden,
+    cl::desc("Maximum codesize blowup factor for an expected specialization"));
 
-static cl::opt<unsigned> MaxSpecSize("pgofuncspec-max-spec-size",
-                                     cl::init(2000), cl::Hidden,
-                                     cl::desc("TODO"));
+static cl::opt<unsigned>
+    MaxSpecSize("pgofuncspec-max-spec-size", cl::init(2000), cl::Hidden,
+                cl::desc("Maximum size for any specialization"));
 
-static cl::opt<unsigned> MinLatencyThresh("pgofuncspec-min-latency-thresh",
-                                          cl::init(5), cl::Hidden,
-                                          cl::desc("TODO"));
+static cl::opt<unsigned>
+    MinLatencyThresh("pgofuncspec-min-latency-thresh", cl::init(5), cl::Hidden,
+                     cl::desc("Minimum latency of the original function before "
+                              "specialisation is attempted"));
 
-static cl::opt<unsigned> MaxSpecInlineSize("pgofuncspec-max-spec-inline-size",
-                                           cl::init(10), cl::Hidden,
-                                           cl::desc("TODO"));
+static cl::opt<unsigned> MaxSpecInlineSize(
+    "pgofuncspec-max-spec-inline-size", cl::init(10), cl::Hidden,
+    cl::desc("Threshold for marking specializations as AlwaysInline"));
 
-/// Check if a callee's formal parameter is used for virtual dispatch.
-/// Must be kept in sync with the same function in ValueProfilePlugins.inc.
-static bool isArgUsedForVirtualDispatch(const Argument *Arg) {
-  for (const User *U : Arg->users()) {
-    const auto *LI = dyn_cast<LoadInst>(U);
-    if (!LI)
-      continue;
-    for (const User *VU : LI->users()) {
-      const Value *MaybeGEP = VU;
-      if (auto *GEP = dyn_cast<GetElementPtrInst>(VU))
-        MaybeGEP = GEP;
-      for (const User *GU : MaybeGEP->users()) {
-        if (const auto *FnLoad = dyn_cast<LoadInst>(GU)) {
-          for (const User *FU : FnLoad->users()) {
-            if (const auto *CB = dyn_cast<CallBase>(FU)) {
-              if (CB->isIndirectCall() && CB->getCalledOperand() == FnLoad)
-                return true;
-            }
-          }
-        }
-        if (const auto *CB = dyn_cast<CallBase>(GU)) {
-          if (CB->isIndirectCall() && CB->getCalledOperand() == VU)
-            return true;
-        }
-      }
-    }
+static cl::opt<bool>
+    InstSimplifyOnly("pgofuncspec-instsimplify-only", cl::init(false),
+                     cl::Hidden,
+                     cl::desc("Use only InstSimplify for trial compilation "
+                              "instead of full O3 pipeline"));
+
+cl::opt<bool> PGOFuncSpecPostInliner(
+    "pgofuncspec-post-inliner", cl::init(true), cl::Hidden,
+    cl::desc(
+        "Run PGO function specialization after the inliner instead of before"));
+
+static cl::opt<bool> PGOFuncSpecLTOOnly(
+    "pgofuncspec-lto-only", cl::init(true), cl::Hidden,
+    cl::desc("Only run PGO function specialization in the ThinLTO backend"));
+
+static cl::opt<std::string>
+    CSVOutputPath("pgofuncspec-csv", cl::init(""), cl::Hidden,
+                  cl::desc("Path to write instrumentation CSV "));
+
+static cl::opt<bool>
+    NaiveLatency("pgofuncspec-naive-latency", cl::init(false), cl::Hidden,
+                 cl::desc("Use naive latency model instead of tagged model"));
+
+FunctionPassManager PGOFunctionSpecializer::buildTrialPipeline() {
+  if (InstSimplifyOnly) {
+    FunctionPassManager FPM;
+    FPM.addPass(InstSimplifyPass());
+    FPM.addPass(SimplifyCFGPass());
+    return FPM;
   }
-  return false;
+  PassBuilder PB;
+  return PB.buildFunctionSimplificationPipeline(OptimizationLevel::O2,
+                                                ThinOrFullLTOPhase::None);
 }
+
 std::pair<Function *, Function *>
 PGOFunctionSpecializer::cloneFunctionSpecialized(Function *F, Argument *Arg,
                                                  Constant *C, uint64_t V) {
@@ -137,8 +153,14 @@ PGOFunctionSpecializer::cloneFunctionSpecialized(Function *F, Argument *Arg,
   // Check if a function with this specialized name already exists in the module
   Function *ExistingFunc = M.getFunction(NewName);
   if (ExistingFunc) {
-    LLVM_DEBUG(dbgs() << "PGOFnSpecialization: Found existing specialization "
-                      << NewName << "\n");
+    if (ExistingFunc->getFunctionType() != F->getFunctionType()) {
+      LLVM_DEBUG(dbgs() << "PGOFnSpecialization: Existing " << NewName
+                        << " has mismatched signature, ignoring\n");
+      ExistingFunc = nullptr;
+    } else {
+      LLVM_DEBUG(dbgs() << "PGOFnSpecialization: Found existing specialization "
+                        << NewName << "\n");
+    }
   }
 
   ValueToValueMapTy VMap;
@@ -149,51 +171,9 @@ PGOFunctionSpecializer::cloneFunctionSpecialized(Function *F, Argument *Arg,
   ClonedF->setLinkage(GlobalValue::InternalLinkage);
   Argument *ClonedArg = ClonedF->getArg(Arg->getArgNo());
   ClonedArg->replaceAllUsesWith(C);
-  FunctionPassManager FPM;
 
-  FPM.addPass(InstCombinePass());
-  FPM.addPass(
-      SimplifyCFGPass(SimplifyCFGOptions().convertSwitchRangeToICmp(true)));
-
-  FPM.addPass(SROAPass(SROAOptions::ModifyCFG));
-
-  FPM.addPass(EarlyCSEPass(false));
-  FPM.addPass(InstCombinePass());
-  FPM.addPass(
-      SimplifyCFGPass(SimplifyCFGOptions().convertSwitchRangeToICmp(true)));
-  LoopPassManager LPM1, LPM2;
-  LPM1.addPass(LoopInstSimplifyPass());
-  LPM1.addPass(LoopSimplifyCFGPass());
-  LPM1.addPass(LICMPass(/*MssaOptCap=*/100, /*MssaNoAccForPromotionCap=*/250,
-                         /*AllowSpeculation=*/false));
-  LPM1.addPass(LoopRotatePass(true, false));
-  LPM1.addPass(LICMPass(/*MssaOptCap=*/100, /*MssaNoAccForPromotionCap=*/250,
-                         /*AllowSpeculation=*/true));
-  LPM1.addPass(SimpleLoopUnswitchPass());
-  LPM1.addPass(LoopSimplifyCFGPass());
-  LPM2.addPass(LoopIdiomRecognizePass());
-  LPM2.addPass(IndVarSimplifyPass());
-  LPM2.addPass(LoopDeletionPass());
-  LPM2.addPass(LoopFullUnrollPass(OptLevel, false, false));
-  FPM.addPass(createFunctionToLoopPassAdaptor(std::move(LPM1),
-                                              /*UseMemorySSA=*/true,
-                                              /*UseBlockFrequencyInfo=*/false));
-  FPM.addPass(
-      SimplifyCFGPass(SimplifyCFGOptions().convertSwitchRangeToICmp(true)));
-  FPM.addPass(InstCombinePass());
-  FPM.addPass(createFunctionToLoopPassAdaptor(std::move(LPM2),
-                                              /*UseMemorySSA=*/false,
-                                              /*UseBlockFrequencyInfo=*/false));
-
-  FPM.addPass(GVNPass());
-  FPM.addPass(SCCPPass());
-  FPM.addPass(InstCombinePass());
-  FPM.addPass(ADCEPass());
-  FPM.addPass(
-      SimplifyCFGPass(SimplifyCFGOptions().convertSwitchRangeToICmp(true)));
-
+  FunctionPassManager FPM = buildTrialPipeline();
   FPM.run(*ClonedF, *FAM);
-
 
   // If no existing function was found, finalize the clone as the actual
   // specialization
@@ -280,11 +260,42 @@ PGOFunctionSpecializer::calculateFunctionSizeLatency(
 
 PGOFunctionSpecializer::~PGOFunctionSpecializer() {
   if (NumSpecsCreated > 0)
-    dbgs() << "PGOFnSpecialization: Created " << NumSpecsCreated
-           << " specializations in module " << M.getName() << "\n";
+    LLVM_DEBUG(dbgs() << "PGOFnSpecialization: Created " << NumSpecsCreated
+                      << " specializations in module " << M.getName() << "\n");
+}
+
+void PGOFunctionSpecializer::writeCSV() {
+  if (CSVOutputPath.empty() || CSVRows.empty())
+    return;
+
+  bool FileExists = sys::fs::exists(CSVOutputPath);
+  uint64_t FileSize = 0;
+  if (FileExists)
+    sys::fs::file_size(CSVOutputPath, FileSize);
+
+  std::error_code EC;
+  raw_fd_ostream OS(CSVOutputPath, EC, sys::fs::OF_Append);
+
+  if (FileSize == 0)
+    OS << "function,caller,args_specialized,original_latency,"
+       << "specialized_latency,latency_reduction_pct,original_size,"
+       << "specialized_size,weighted_latency,val_prop,accepted,rejection_"
+          "reason\n";
+
+  for (const auto &R : CSVRows) {
+    OS << R.FunctionName << "," << R.Caller << ","
+       << "\"" << R.ArgsSpecialized << "\"," << R.OriginalLatency << ","
+       << R.SpecializedLatency << "," << format("%.2f", R.LatencyReductionPct)
+       << "," << R.OriginalSize << "," << R.SpecializedSize << ","
+       << R.WeightedLatency << "," << R.ValProp << ","
+       << (R.Accepted ? "true" : "false") << "," << R.RejectionReason << "\n";
+  }
 }
 
 bool PGOFunctionSpecializer::run() {
+  if (DisablePass)
+    return false;
+
   SmallVector<PGOSpec, 32> AllSpecs;
   unsigned NumCandidates = 0;
 
@@ -342,38 +353,33 @@ bool PGOFunctionSpecializer::run() {
   if (!NumCandidates) {
     LLVM_DEBUG(dbgs() << "PGOFnSpecialization: No possible specializations "
                          "found in module\n");
+    writeCSV();
     return false;
   }
 
-  const unsigned NSpecs = unsigned(AllSpecs.size());
-  SmallVector<unsigned> BestSpecs(NSpecs + 1);
-  std::iota(BestSpecs.begin(), BestSpecs.begin() + NSpecs, 0);
-
   LLVM_DEBUG(dbgs() << "PGOFnSpecialization: List of specializations\n");
-  for (unsigned I = 0; I < NSpecs; ++I) {
-    const PGOSpec &S = AllSpecs[BestSpecs[I]];
+  for (const PGOSpec &S : AllSpecs) {
     auto &ORE = FAM->getResult<OptimizationRemarkEmitterAnalysis>(*S.F);
     ORE.emit([&]() {
-      return OptimizationRemark(DEBUG_TYPE, "Specialized", S.F)
-             << "specialized " << ore::NV("Function", S.F) << " on argument "
-             << ore::NV("ArgNo", S.Arg.Formal->getArgNo())
-             << " with latency reduction from "
-             << ore::NV("OriginalLatency", S.OriginalLatency) << " to "
-             << ore::NV("SpecializedLatency", S.SpecializedLatency)
-             << " (count: " << ore::NV("Count", S.Count)
-             << ", code size: "
-             << ore::NV("SpecializedCodeSize", S.SpecializedCodeSize) << ")";
+      auto R = OptimizationRemark(DEBUG_TYPE, "Specialized", S.F)
+               << "specialized " << ore::NV("Function", S.F) << " on argument "
+               << ore::NV("ArgNo", S.Arg.Formal->getArgNo())
+               << " with latency reduction from "
+               << ore::NV("OriginalLatency", S.OriginalLatency) << " to "
+               << ore::NV("SpecializedLatency", S.SpecializedLatency)
+               << " (count: " << ore::NV("Count", S.Count) << ", code size: "
+               << ore::NV("SpecializedCodeSize", S.SpecializedCodeSize) << ")";
+      return R;
     });
-    dbgs() << "PGOFnSpecialization: Function " << S.F->getName()
+    LLVM_DEBUG(dbgs() << "PGOFnSpecialization: Function " << S.F->getName()
                       << " , OriginalLatency " << S.OriginalLatency
                       << " , SpecializedLatency " << S.SpecializedLatency
                       << " , Count " << S.Count << " , SpecializedCodeSize "
                       << S.SpecializedCodeSize << " , MinValueProp "
-                      << S.MinValueProp << "\n";
-               dbgs() << "PGOFnSpecialization:   FormalArg = "
-                      << S.Arg.Formal->getNameOrAsOperand()
-                      << ", ActualArg = " << S.Arg.Actual->getNameOrAsOperand()
-                      << "\n";
+                      << S.MinValueProp << "\n");
+    LLVM_DEBUG(dbgs() << "PGOFnSpecialization:   FormalArg = "
+                      << S.Arg.Formal->getNameOrAsOperand() << ", ActualArg = "
+                      << S.Arg.Actual->getNameOrAsOperand() << "\n");
   }
 
   struct CallSiteSpecsItem {
@@ -382,12 +388,15 @@ bool PGOFunctionSpecializer::run() {
   };
 
   DenseMap<CallBase *, CallSiteSpecsItem> CallSiteSpecs;
-  for (unsigned I = 0; I < NSpecs; ++I) {
-    PGOSpec &S = AllSpecs[BestSpecs[I]];
+  for (PGOSpec &S : AllSpecs) {
 
     auto *Func = S.getSpecializedFunc();
-    auto SpecFuncEntryCount = Func->getEntryCount();
-    Func->setEntryCount(SpecFuncEntryCount->getCount() + S.Count, SpecFuncEntryCount->getType());
+    if (!Func->isDeclaration()) {
+      auto SpecFuncEntryCount = Func->getEntryCount();
+      if (SpecFuncEntryCount)
+        Func->setEntryCount(SpecFuncEntryCount->getCount() + S.Count,
+                            SpecFuncEntryCount->getType());
+    }
 
     for (auto &[C, Count] : S.CallSites) {
       auto &Item = CallSiteSpecs[C];
@@ -401,7 +410,6 @@ bool PGOFunctionSpecializer::run() {
     Function *Func = CS->getFunction();
     auto &Ctx = Func->getContext();
 
-    DominatorTree &DT = GetDT(*Func);
     BasicBlock *BB = CS->getParent();
 
     auto &BFI = GetBFI(*Func);
@@ -415,29 +423,37 @@ bool PGOFunctionSpecializer::run() {
     BasicBlock *UnwindBB = nullptr;
 
     if (auto *Invoke = dyn_cast<InvokeInst>(CS)) {
-      DefaultBB = SplitBlock(BB, CS, &DT);
+      DefaultBB = SplitBlock(BB, CS);
 
       BasicBlock *OrigNormalDest = Invoke->getNormalDest();
       UnwindBB = Invoke->getUnwindDest();
 
-      MergeBB = SplitBlock(OrigNormalDest, &OrigNormalDest->front(), &DT);
+      MergeBB = BasicBlock::Create(Ctx, "", Func, OrigNormalDest);
+      BranchInst::Create(OrigNormalDest, MergeBB);
 
       Invoke->setNormalDest(MergeBB);
+
+      for (PHINode &PN : OrigNormalDest->phis()) {
+        int Idx = PN.getBasicBlockIndex(DefaultBB);
+        if (Idx >= 0)
+          PN.setIncomingBlock(Idx, MergeBB);
+      }
     } else {
-      DefaultBB = SplitBlock(BB, CS, &DT);
+      DefaultBB = SplitBlock(BB, CS);
       BasicBlock::iterator It(*CS);
       ++It;
       assert(It != DefaultBB->end());
-      MergeBB = SplitBlock(DefaultBB, &(*It), &DT);
+      MergeBB = SplitBlock(DefaultBB, &(*It));
     }
 
-    // While this pass invalidates BFI, there could be multiple call instructions that trigger specialization within the same block. As we depend on BFI to calculate switch weights for each specialization at a call instruction this information should be kept up to date.
+    // While this pass invalidates BFI, there could be multiple call
+    // instructions that trigger specialization within the same block. As we
+    // depend on BFI to calculate switch weights for each specialization at a
+    // call instruction this information should be kept up to date.
     BFI.setBlockFreq(MergeBB, OrigBBFreq);
 
     MergeBB->setName("CS.Merge");
     DefaultBB->setName("CS.Default");
-
-    DomTreeUpdater DTU(&DT, DomTreeUpdater::UpdateStrategy::Eager);
 
     auto ArgNo = SpecsInfo.Specs[0].first->Arg.Formal->getArgNo();
     Value *ArgVar = CS->getArgOperand(ArgNo);
@@ -455,16 +471,22 @@ bool PGOFunctionSpecializer::run() {
       ArgVar = IRB.CreateBitCast(ArgVar, IntType);
     }
 
-    SwitchInst *SI = IRB.CreateSwitch(ArgVar, DefaultBB, SpecsInfo.Specs.size());
+    SwitchInst *SI =
+        IRB.CreateSwitch(ArgVar, DefaultBB, SpecsInfo.Specs.size());
 
     SmallVector<uint64_t, 16> CaseCounts;
-    uint64_t DefaultCount = (TotalCount > SpecsInfo.TotalCount) ? TotalCount - SpecsInfo.TotalCount : 0;
+    uint64_t DefaultCount = (TotalCount > SpecsInfo.TotalCount)
+                                ? TotalCount - SpecsInfo.TotalCount
+                                : 0;
     uint64_t MaxCount = DefaultCount;
     CaseCounts.push_back(DefaultCount);
 
     auto OrigFuncEntryCount = Func->getEntryCount();
-    Func->setEntryCount(OrigFuncEntryCount->getCount() > SpecsInfo.TotalCount ?
-                        (OrigFuncEntryCount->getCount() - SpecsInfo.TotalCount) : 0, OrigFuncEntryCount->getType());
+    Func->setEntryCount(
+        OrigFuncEntryCount->getCount() > SpecsInfo.TotalCount
+            ? (OrigFuncEntryCount->getCount() - SpecsInfo.TotalCount)
+            : 0,
+        OrigFuncEntryCount->getType());
 
     Term->eraseFromParent();
 
@@ -478,10 +500,7 @@ bool PGOFunctionSpecializer::run() {
       PHI->addIncoming(CS, DefaultBB);
     }
 
-    dbgs() << "\n\n== Basic Block After==\n";
-
-    std::vector<DominatorTree::UpdateType> Updates;
-    Updates.reserve(2 * SpecsInfo.Specs.size());
+    LLVM_DEBUG(dbgs() << "\n\n== Basic Block After==\n");
 
     unsigned CaseIdx = 0;
     for (auto &[SpecPtr, Count] : SpecsInfo.Specs) {
@@ -495,8 +514,13 @@ bool PGOFunctionSpecializer::run() {
       NewCB->setArgOperand(ArgNo, SpecArgVal);
       NewCB->insertInto(CaseBB, CaseBB->end());
 
-      if (auto *Invoke = dyn_cast<InvokeInst>(NewCB)) {
-        Invoke->setNormalDest(MergeBB);
+      if (UnwindBB) {
+        // Update phis for the new predecessor
+        for (PHINode &PN : UnwindBB->phis()) {
+          Value *V = PN.getIncomingValueForBlock(DefaultBB);
+          if (V)
+            PN.addIncoming(V, CaseBB);
+        }
       } else {
         IRBuilder<> IRBCase(CaseBB);
         IRBCase.CreateBr(MergeBB);
@@ -514,18 +538,14 @@ bool PGOFunctionSpecializer::run() {
       if (!CSTy->isVoidTy())
         PHI->addIncoming(NewCB, CaseBB);
 
-      Updates.push_back({DominatorTree::Insert, CaseBB, MergeBB});
-      Updates.push_back({DominatorTree::Insert, BB, CaseBB});
-
       MaxCount = std::max(MaxCount, Count);
       CaseCounts.push_back(Count);
 
       LLVM_DEBUG(dbgs() << *CaseBB << "\n");
     }
 
-    DTU.applyUpdates(Updates);
-
-    // Will be used to regenerate BFI appropriately, safe as this pass invalidates it
+    // Will be used to regenerate BFI appropriately, safe as this pass
+    // invalidates it
     setProfMetadata(Func->getParent(), SI, CaseCounts, MaxCount);
   }
 
@@ -543,6 +563,7 @@ bool PGOFunctionSpecializer::run() {
     }
   }
 
+  writeCSV();
   return !CallSiteSpecs.empty();
 }
 
@@ -616,24 +637,12 @@ bool PGOFunctionSpecializer::findSpecializations(
   auto [OriginalCodeSize, _] = calculateFunctionSizeLatency({}, F, BlockTag);
 
   SmallVector<std::pair<Argument *, uint32_t>> Args;
-  uint32_t VPArgIdx = 0;
-  for (Argument &Arg : F->args()) {
-    // Must be kept in sync with the argument value profiling plugin.
-    // The plugin profiles int/float/double args and also pointer args used
-    // for virtual dispatch. We only handle scalar types here; pointer args
-    // used for virtual dispatch still increment the index.
-    Type *T = Arg.getType();
+  for (auto &PA : getProfiledArgs(*F))
+    if (PA.Kind == ProfiledArgKind::Scalar)
+      Args.push_back({PA.Arg, PA.VPArgIdx});
 
-    if (T->isIntegerTy() || T->isFloatTy() || T->isDoubleTy())
-      Args.push_back({&Arg, VPArgIdx++});
-    else if (T->isPointerTy() && Arg.hasNonNullAttr() &&
-             isArgUsedForVirtualDispatch(&Arg))
-      VPArgIdx++; // Skip but count — profiled by vtable specialization pass
-  }
-
-  if (Args.empty()) {
+  if (Args.empty())
     return false;
-  }
 
   uint64_t BestArgSpecsScore = 0;
   DenseMap<Constant *, PGOSpec> BestArgSpecs;
@@ -653,10 +662,13 @@ bool PGOFunctionSpecializer::findSpecializations(
       if (CS.getCalledFunction() != F)
         continue;
 
+      if (CS.isMustTailCall())
+        continue;
+
       uint64_t TotalCount;
       auto ValueProfData = getValueProfDataFromInst(CS, IPVK_ArgumentValue, 5,
                                                     TotalCount, false, VPIdx);
-      auto &BFI = GetBFI(*F);
+      auto &BFI = GetBFI(*CS.getFunction());
       auto BBEdgeCount = BFI.getBlockProfileCount(CS.getParent());
       LLVM_DEBUG(dbgs() << "TotalCount " << TotalCount << " , BBEdgeCount "
                         << (BBEdgeCount ? *BBEdgeCount : 0) << '\n');
@@ -672,8 +684,9 @@ bool PGOFunctionSpecializer::findSpecializations(
         // Drop values that have a percentage of calls below the configured
         // cutoff.
         unsigned ValProp = (ProfiledValue.Count * 100) / TotalCount;
-        dbgs() << "PGOFnSpecialization: Value " << ProfiledValue.Value
-               << " , ValProp " << ValProp << '\n';
+        LLVM_DEBUG(dbgs() << "PGOFnSpecialization: Value "
+                          << ProfiledValue.Value << " , ValProp " << ValProp
+                          << '\n');
 
         if (ValProp < AnalysisCutoffThresh)
           continue;
@@ -685,35 +698,26 @@ bool PGOFunctionSpecializer::findSpecializations(
 
         BranchProbability ValBranchProb(ValProp, 100);
 
-        auto checkWeightedSpecializedLatency =
-            [&](unsigned OriginalLatency, unsigned SpecializedLatency) {
-              if (OriginalLatency == 0)
-                return false;
-
-              // Account for dispatch cost at call site: all calls pay dispatch
-              // overhead Calculate in absolute latency units to avoid rounding
-              // to zero for large functions WeightedLatency =
-              // (SpecializedLatency * ValProp + OriginalLatency * (100-ValProp)
-              // + DispatchCost * 100) / OriginalLatency
-              uint64_t WeightedLatencyAbs =
-                  static_cast<uint64_t>(SpecializedLatency) * ValProp +
-                  static_cast<uint64_t>(OriginalLatency) * (100 - ValProp);
-
-              if (ValBranchProb < PredictableThreshBranchProb)
-                WeightedLatencyAbs += static_cast<uint64_t>(DispatchCost) * 100;
-              else
-                WeightedLatencyAbs += 100;
-
-              unsigned WeightedLatency = WeightedLatencyAbs / OriginalLatency;
-              dbgs() << "PGOFnSpecialization: WeightedLatency="
-                     << WeightedLatency << '\n';
-
-              return WeightedLatency < CandidateCutoffThresh;
-            };
+        // WeightedLatency = (SpecLat * ValProp + OrigLat * (100-ValProp)
+        //                    + DispatchCost * 100) / OrigLat
+        // Computed in absolute units to avoid rounding to zero for large
+        // functions. std::nullopt when OrigLat is 0 (treated as a fail).
+        auto computeWeightedLatency =
+            [&](unsigned OrigLat, unsigned SpecLat) -> std::optional<unsigned> {
+          if (OrigLat == 0)
+            return std::nullopt;
+          uint64_t WLAbs = static_cast<uint64_t>(SpecLat) * ValProp +
+                           static_cast<uint64_t>(OrigLat) * (100 - ValProp);
+          WLAbs += (ValBranchProb < PredictableThreshBranchProb)
+                       ? static_cast<uint64_t>(DispatchCost) * 100
+                       : 100;
+          return WLAbs / OrigLat;
+        };
 
         if (auto It = ArgSpecsMap.find(C); It != ArgSpecsMap.end()) {
-          if (!checkWeightedSpecializedLatency(It->second.OriginalLatency,
-                                               It->second.SpecializedLatency))
+          if (computeWeightedLatency(It->second.OriginalLatency,
+                                     It->second.SpecializedLatency)
+                  .value_or(CandidateCutoffThresh) >= CandidateCutoffThresh)
             continue;
 
           It->second.CallSites.push_back({&CS, ProfiledValue.Count});
@@ -725,41 +729,67 @@ bool PGOFunctionSpecializer::findSpecializations(
 
           auto [SpecializedCodeSize, SpecializedLatency] =
               calculateFunctionSizeLatency({}, ClonedF, BlockTag);
-          auto [_, OriginalLatency] = calculateFunctionSizeLatency(
-              getTaggedBlocks(GetBFI, ClonedF, BlockTag), F, BlockTag);
+          auto OrigTags = NaiveLatency
+                              ? std::map<unsigned, uint64_t>{}
+                              : getTaggedBlocks(GetBFI, ClonedF, BlockTag);
+          auto [_, OriginalLatency] =
+              calculateFunctionSizeLatency(OrigTags, F, BlockTag);
 
-          dbgs() << "PGOFnSpecialization: Original CodeSize="
-                 << OriginalCodeSize << " Latency=" << OriginalLatency
-                 << " Specialized CodeSize=" << SpecializedCodeSize
-                 << " Latency=" << SpecializedLatency << "\n";
+          LLVM_DEBUG(dbgs()
+                     << "PGOFnSpecialization: Original CodeSize="
+                     << OriginalCodeSize << " Latency=" << OriginalLatency
+                     << " Specialized CodeSize=" << SpecializedCodeSize
+                     << " Latency=" << SpecializedLatency << "\n");
 
-
-          if (SpecializedCodeSize < MaxSpecInlineSize) {
+          if (SpecializedCodeSize < MaxSpecInlineSize &&
+              !ClonedF->hasFnAttribute(Attribute::NoInline)) {
             ClonedF->addFnAttr(Attribute::AlwaysInline);
           }
 
-          if (!checkWeightedSpecializedLatency(OriginalLatency,
-                                               SpecializedLatency) ||
-              ((OriginalLatency - SpecializedLatency) * BlowupFactor <
-               SpecializedCodeSize) ||
-              SpecializedCodeSize >= MaxSpecSize ||
-              OriginalLatency < MinLatencyThresh) {
+          std::optional<unsigned> WeightedLatency =
+              computeWeightedLatency(OriginalLatency, SpecializedLatency);
+          LLVM_DEBUG(dbgs() << "PGOFnSpecialization: WeightedLatency="
+                            << WeightedLatency.value_or(0) << '\n');
+
+          StringRef RejectReason;
+          if (WeightedLatency.value_or(CandidateCutoffThresh) >=
+              CandidateCutoffThresh)
+            RejectReason = "latency";
+          else if (OriginalLatency > SpecializedLatency &&
+                   (OriginalLatency - SpecializedLatency) * BlowupFactor <
+                       SpecializedCodeSize)
+            RejectReason = "blowup";
+          else if (SpecializedCodeSize >= MaxSpecSize)
+            RejectReason = "max_size";
+          else if (OriginalLatency < MinLatencyThresh)
+            RejectReason = "min_lat";
+
+          if (!CSVOutputPath.empty()) {
+            double ReductionPct =
+                OriginalLatency > 0
+                    ? 100.0 * (double)(OriginalLatency - SpecializedLatency) /
+                          OriginalLatency
+                    : 0.0;
+            CSVRows.push_back(
+                {F->getName().str(), CS.getFunction()->getName().str(),
+                 "arg" + std::to_string(A->getArgNo()) + "=" +
+                     std::to_string(ProfiledValue.Value),
+                 OriginalLatency, SpecializedLatency, ReductionPct,
+                 OriginalCodeSize, SpecializedCodeSize,
+                 WeightedLatency.value_or(0), ValProp, RejectReason.empty(),
+                 RejectReason.str()});
+          }
+
+          if (!RejectReason.empty()) {
             FAM->clear(*ClonedF, ClonedF->getName());
             ClonedF->eraseFromParent();
             continue;
           }
 
-          auto ASIt =
-              ArgSpecsMap.try_emplace(C, F,
-                                                      ClonedF,
-              ExistingFunc,
-                                                      ArgInfo{A, C},
-                                                      OriginalCodeSize,
-                                                      OriginalLatency,
-                                                      SpecializedCodeSize,
-                                                      SpecializedLatency,
-                                                      ProfiledValue.Count,
-                                          ValProp);
+          auto ASIt = ArgSpecsMap.try_emplace(
+              C, F, ClonedF, ExistingFunc, ArgInfo{A, C}, OriginalCodeSize,
+              OriginalLatency, SpecializedCodeSize, SpecializedLatency,
+              ProfiledValue.Count, ValProp);
           ASIt.first->second.CallSites.push_back({&CS, ProfiledValue.Count});
         }
       }
@@ -824,12 +854,14 @@ bool PGOFunctionSpecializer::isCandidateFunction(Function *F) {
   if (F->hasFnAttribute("pgo.specialization"))
     return false;
 
-
   return true;
 }
 
 PreservedAnalyses
 PGOFunctionSpecializationPass::run(Module &M, ModuleAnalysisManager &AM) {
+  if (PGOFuncSpecLTOOnly && LTOPhase != ThinOrFullLTOPhase::ThinLTOPostLink)
+    return PreservedAnalyses::all();
+
   auto &FAM = AM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
 
   auto GetTLI = [&FAM](Function &F) -> const TargetLibraryInfo & {
@@ -841,9 +873,6 @@ PGOFunctionSpecializationPass::run(Module &M, ModuleAnalysisManager &AM) {
   auto GetAC = [&FAM](Function &F) -> AssumptionCache & {
     return FAM.getResult<AssumptionAnalysis>(F);
   };
-  auto GetDT = [&FAM](Function &F) -> DominatorTree & {
-    return FAM.getResult<DominatorTreeAnalysis>(F);
-  };
   auto GetBFI = [&FAM](Function &F) -> BlockFrequencyInfo & {
     return FAM.getResult<BlockFrequencyAnalysis>(F);
   };
@@ -851,7 +880,7 @@ PGOFunctionSpecializationPass::run(Module &M, ModuleAnalysisManager &AM) {
   auto &PSI = AM.getResult<ProfileSummaryAnalysis>(M);
 
   PGOFunctionSpecializer Specializer(M, &FAM, &PSI, GetBFI, GetTLI, GetTTI,
-                                     GetAC, GetDT, OptLevel);
+                                     GetAC, OptLevel);
 
   bool Changed = Specializer.run();
 

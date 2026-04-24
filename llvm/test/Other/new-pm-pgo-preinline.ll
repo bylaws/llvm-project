@@ -15,6 +15,9 @@
 ; CHECK-Osz-NEXT: Running pass: InstCombinePass on foo
 ; CHECK-Osz-NEXT: Invalidating analysis: InlineAdvisorAnalysis
 ; CHECK-Osz-NEXT: Running pass: GlobalDCEPass
+; CHECK-Osz-NEXT: Running pass: ArgumentPromotionPass
+; CHECK-Osz-NEXT: Running pass: CoroSplitPass
+; CHECK-Osz-NEXT: Running pass: CoroAnnotationElidePass
 ; CHECK-Osz-NEXT: Running pass: PGOInstrumentationGen
 
 define void @foo() {

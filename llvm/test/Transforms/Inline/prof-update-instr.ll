@@ -46,12 +46,12 @@ define void @caller() !prof !21 {
 !14 = !{i32 999999, i64 1, i32 2}
 !15 = !{!"function_entry_count", i64 1000}
 !16 = !{!"branch_weights", i64 2000}
-!18 = !{!"VP", i32 0, i64 140, i64 111, i64 80, i64 222, i64 40, i64 333, i64 20}
-!19 = !{!"VP", i32 0, i64 200, i64 111, i64 100, i64 222, i64 60, i64 333, i64 40}
+!18 = !{!"VP", i32 0, i64 140, i32 3, i64 111, i64 80, i64 222, i64 40, i64 333, i64 20}
+!19 = !{!"VP", i32 0, i64 200, i32 3, i64 111, i64 100, i64 222, i64 60, i64 333, i64 40}
 !20 = !{!"branch_weights", i32 1000, i32 1000}
 !21 = !{!"function_entry_count", i64 400}
 attributes #0 = { alwaysinline }
 ; CHECK: ![[ENTRY_COUNT]] = !{!"function_entry_count", i64 600}
-; CHECK: ![[COUNT_IND_CALLEE1]] = !{!"VP", i32 0, i64 200, i64 111, i64 100, i64 222, i64 60, i64 333, i64 40}
-; CHECK: ![[COUNT_IND_CALLEE]] = !{!"VP", i32 0, i64 84, i64 111, i64 48, i64 222, i64 24, i64 333, i64 12}
-; CHECK: ![[COUNT_IND_CALLER]] = !{!"VP", i32 0, i64 56, i64 111, i64 32, i64 222, i64 16, i64 333, i64 8}
+; CHECK: ![[COUNT_IND_CALLEE1]] = !{!"VP", i32 0, i64 200, i32 3, i64 111, i64 100, i64 222, i64 60, i64 333, i64 40}
+; CHECK: ![[COUNT_IND_CALLEE]] = !{!"VP", i32 0, i64 84, i32 3, i64 111, i64 48, i64 222, i64 24, i64 333, i64 12}
+; CHECK: ![[COUNT_IND_CALLER]] = !{!"VP", i32 0, i64 56, i32 3, i64 111, i64 32, i64 222, i64 16, i64 333, i64 8}

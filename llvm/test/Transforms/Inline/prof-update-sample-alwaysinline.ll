@@ -50,10 +50,10 @@ define void @caller() {
 !15 = !{!"function_entry_count", i64 1000}
 !16 = !{!"branch_weights", i32 2000}
 !17 = !{!"branch_weights", i32 400}
-!18 = !{!"VP", i32 0, i64 140, i64 111, i64 80, i64 222, i64 40, i64 333, i64 20}
+!18 = !{!"VP", i32 0, i64 140, i32 3, i64 111, i64 80, i64 222, i64 40, i64 333, i64 20}
 attributes #0 = { alwaysinline }
 ; CHECK: ![[ENTRY_COUNT]] = !{!"function_entry_count", i64 600}
 ; CHECK: ![[COUNT_CALLEE]] = !{!"branch_weights", i32 1200}
-; CHECK: ![[COUNT_IND_CALLEE]] = !{!"VP", i32 0, i64 84, i64 111, i64 48, i64 222, i64 24, i64 333, i64 12}
+; CHECK: ![[COUNT_IND_CALLEE]] = !{!"VP", i32 0, i64 84, i32 3, i64 111, i64 48, i64 222, i64 24, i64 333, i64 12}
 ; CHECK: ![[COUNT_CALLER]] = !{!"branch_weights", i32 800}
-; CHECK: ![[COUNT_IND_CALLER]] = !{!"VP", i32 0, i64 56, i64 111, i64 32, i64 222, i64 16, i64 333, i64 8}
+; CHECK: ![[COUNT_IND_CALLER]] = !{!"VP", i32 0, i64 56, i32 3, i64 111, i64 32, i64 222, i64 16, i64 333, i64 8}

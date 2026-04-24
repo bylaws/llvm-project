@@ -5,13 +5,6 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
-//
-// This pass specializes functions on 100% monomorphic vtable arguments using
-// IPVK_VTableTarget profile data. It clones functions with the vptr load
-// replaced by a constant vtable address point, enabling downstream passes
-// (InstCombine, inliner) to devirtualize and inline the virtual calls.
-//
-//===----------------------------------------------------------------------===//
 
 #ifndef LLVM_TRANSFORMS_IPO_PGOVTABLEFUNCTIONSPECIALIZATION_H
 #define LLVM_TRANSFORMS_IPO_PGOVTABLEFUNCTIONSPECIALIZATION_H

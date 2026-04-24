@@ -55,9 +55,9 @@ for.inc:                                          ; preds = %if.end
 ; CHECK: for.inc:
 ; NOTENTRY: %pgocount2 = load i64, ptr getelementptr inbounds ([3 x i64], ptr @"__profc_?run@@YAXH@Z", i32 0, i32 1)
 ; ENTRY: %pgocount2 = load i64, ptr getelementptr inbounds ([3 x i64], ptr @"__profc_?run@@YAXH@Z", i32 0, i32 2)
-; CHECK: %3 = add i64 %pgocount2, 1
-; NOTENTRY: store i64 %3, ptr getelementptr inbounds ([3 x i64], ptr @"__profc_?run@@YAXH@Z", i32 0, i32 1)
-; ENTRY: store i64 %3, ptr getelementptr inbounds ([3 x i64], ptr @"__profc_?run@@YAXH@Z", i32 0, i32 2)
+; CHECK: %4 = add i64 %pgocount2, 1
+; NOTENTRY: store i64 %4, ptr getelementptr inbounds ([3 x i64], ptr @"__profc_?run@@YAXH@Z", i32 0, i32 1)
+; ENTRY: store i64 %4, ptr getelementptr inbounds ([3 x i64], ptr @"__profc_?run@@YAXH@Z", i32 0, i32 2)
   %inc = add nuw nsw i32 %i.0, 1
   br label %for.cond
 

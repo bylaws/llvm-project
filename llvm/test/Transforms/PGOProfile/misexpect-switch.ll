@@ -3,12 +3,12 @@
 ; RUN: llvm-profdata merge %S/Inputs/misexpect-switch.proftext -o %t.profdata
 ; RUN: llvm-profdata merge %S/Inputs/misexpect-switch-correct.proftext -o %t.c.profdata
 
-; RUN: opt < %s -passes="function(lower-expect),pgo-instr-use" -pgo-test-profile-file=%t.profdata -pgo-warn-misexpect -S 2>&1 | FileCheck %s --check-prefix=WARNING
-; RUN: opt < %s -passes="function(lower-expect),pgo-instr-use" -pgo-test-profile-file=%t.profdata -pass-remarks=misexpect -S 2>&1 | FileCheck %s --check-prefix=REMARK
-; RUN: opt < %s -passes="function(lower-expect),pgo-instr-use" -pgo-test-profile-file=%t.profdata -pgo-warn-misexpect -pass-remarks=misexpect -S 2>&1 | FileCheck %s --check-prefix=BOTH
-; RUN: opt < %s -passes="function(lower-expect),pgo-instr-use" -pgo-test-profile-file=%t.profdata -S 2>&1 | FileCheck %s --check-prefix=DISABLED
+; RUN: opt < %s -passes="function(lower-expect),pgo-instr-use" -pgo-test-profile-file=%t.profdata -pgo-warn-misexpect -enable-argument-value-profiling=false -S 2>&1 | FileCheck %s --check-prefix=WARNING
+; RUN: opt < %s -passes="function(lower-expect),pgo-instr-use" -pgo-test-profile-file=%t.profdata -pass-remarks=misexpect -enable-argument-value-profiling=false -S 2>&1 | FileCheck %s --check-prefix=REMARK
+; RUN: opt < %s -passes="function(lower-expect),pgo-instr-use" -pgo-test-profile-file=%t.profdata -pgo-warn-misexpect -pass-remarks=misexpect -enable-argument-value-profiling=false -S 2>&1 | FileCheck %s --check-prefix=BOTH
+; RUN: opt < %s -passes="function(lower-expect),pgo-instr-use" -pgo-test-profile-file=%t.profdata -enable-argument-value-profiling=false -S 2>&1 | FileCheck %s --check-prefix=DISABLED
 
-; RUN: opt < %s -passes="function(lower-expect),pgo-instr-use" -pgo-test-profile-file=%t.c.profdata -pgo-warn-misexpect -pass-remarks=misexpect -S 2>&1 | FileCheck %s --check-prefix=CORRECT
+; RUN: opt < %s -passes="function(lower-expect),pgo-instr-use" -pgo-test-profile-file=%t.c.profdata -pgo-warn-misexpect -pass-remarks=misexpect -enable-argument-value-profiling=false -S 2>&1 | FileCheck %s --check-prefix=CORRECT
 
 ; WARNING-DAG: warning: misexpect-switch.c:26:30: 0.00%
 ; WARNING-NOT: remark: misexpect-switch.c:26:30: Potential performance regression from use of the llvm.expect intrinsic: Annotation was correct on 0.00% (0 / 8112) of profiled executions.

@@ -32,7 +32,7 @@ RUN: printf '\0\0\0\0\0\0\0\0' >> %t.profraw
 RUN: printf '\0\0\6\0\2\0\0\0' >> %t.profraw
 RUN: printf '\0\0\0\0\0\0\0\0' >> %t.profraw
 RUN: printf '\0\0\0\0\0\0\0\0' >> %t.profraw
-RUN: printf '\0\0\0\0\0\0\0\0' >> %t.profraw
+RUN: printf '\4\0\0\0\0\0\0\0' >> %t.profraw
 
 // Data Section
 //
@@ -54,8 +54,10 @@ RUN: printf '\0\0\0\0\0\0\0\0' >> %t.profraw
 
 RUN: printf '\0\0\0\0\0\0\0\0' >> %t.profraw
 RUN: printf '\0\0\0\0\0\0\0\0' >> %t.profraw
-RUN: printf '\02\0\0\0\0\0\0\0' >> %t.profraw
-RUN: printf '\0\0\0\0\0\0\0\0' >> %t.profraw
+RUN: printf '\02\0\0\0' >> %t.profraw
+RUN: printf '\0\0\0\0\0\0\0\0\0\0\0\0' >> %t.profraw
+RUN: printf '\0\0\0\0' >> %t.profraw
+RUN: printf '\0\0\0\0' >> %t.profraw
 
 // Counter Section
 

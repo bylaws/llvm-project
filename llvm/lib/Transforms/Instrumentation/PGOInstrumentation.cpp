@@ -2475,6 +2475,21 @@ void setIrrLoopHeaderMetadata(Module *M, Instruction *TI, uint64_t Count) {
                   MDB.createIrrLoopHeaderWeight(Count));
 }
 
+SmallVector<ProfiledArgInfo> getProfiledArgs(Function &F) {
+  SmallVector<ProfiledArgInfo> Result;
+  uint32_t VPArgIdx = 0;
+  for (Argument &Arg : F.args()) {
+    Type *T = Arg.getType();
+    if (T->isIntegerTy() || T->isFloatTy() || T->isDoubleTy()) {
+      Result.push_back({&Arg, VPArgIdx++, ProfiledArgKind::Scalar});
+    } else if (T->isPointerTy() && Arg.hasNonNullAttr() &&
+               isArgUsedForVirtualDispatch(&Arg)) {
+      Result.push_back({&Arg, VPArgIdx++, ProfiledArgKind::VDispatchPtr});
+    }
+  }
+  return Result;
+}
+
 template <> struct GraphTraits<PGOUseFunc *> {
   using NodeRef = const BasicBlock *;
   using ChildIteratorType = const_succ_iterator;

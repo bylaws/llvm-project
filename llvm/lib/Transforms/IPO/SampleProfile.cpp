@@ -902,6 +902,7 @@ updateIDTMetaData(Instruction &Inst,
 
   uint32_t MaxMDCount =
       std::min(NewCallTargets.size(), static_cast<size_t>(MaxNumPromotions));
+  Inst.setMetadata(LLVMContext::MD_prof, nullptr);
   annotateValueSite(*Inst.getParent()->getParent()->getParent(), Inst,
                     NewCallTargets, Sum, IPVK_IndirectCallTarget, MaxMDCount);
 }
